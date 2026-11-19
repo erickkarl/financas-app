@@ -1,6 +1,6 @@
 // Cliente mínimo da API do Pluggy (https://api.pluggy.ai), direto do aparelho (D8, RF-000.3).
 // Regras: nunca registrar nem incluir em erro o Client ID, o Client Secret, a apiKey ou o connect token.
-import type { PluggyAccount, PluggyConsent, PluggyItem, PluggyPage, PluggyTransaction } from './types';
+import type { PluggyAccount, PluggyConsent, PluggyItem, PluggyPage, PluggyTransaction, PluggyInvestment } from './types';
 
 export const PLUGGY_BASE_URL = 'https://api.pluggy.ai';
 export const MEU_PLUGGY_CONNECTOR_ID = 200; // confirmado em GET /connectors/200 (18/11/2026)
@@ -142,6 +142,16 @@ export function createPluggyClient(opts: PluggyClientOptions) {
         if (e instanceof PluggyError && e.kind === 'not_found') return;
         throw e;
       }
+    },
+    /** Ciclo 2 (RF-016, R-5): investimentos da conexão. Paginado (`page`, `totalPages`). */
+    async getInvestments(itemId: string): Promise<PluggyInvestment[]> {
+      const all: PluggyInvestment[] = [];
+      for (let page = 1; page <= 20; page++) {
+        const res = await request<PluggyPage<PluggyInvestment> & { totalPages?: number }>('GET', `/investments?itemId=${encodeURIComponent(itemId)}&pageSize=500&page=${page}`);
+        all.push(...(res.results ?? []));
+        if (!res.totalPages || page >= res.totalPages) break;
+      }
+      return all;
     },
     async getAccounts(itemId: string): Promise<PluggyAccount[]> {
       const res = await request<PluggyPage<PluggyAccount>>('GET', `/accounts?itemId=${encodeURIComponent(itemId)}`);

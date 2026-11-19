@@ -119,6 +119,13 @@ export function formatCount(n: number): string {
 }
 
 /** Tipo da conta informado pelo Pluggy (subtype), para a linha da conta quando o nome repete o da conexão (REV-30). */
+/** T-15 (UX 0.16, C2-09): conta e conexão; quando os nomes são iguais, o tipo da conta no lugar do nome repetido. */
+export function accountConnectionLine(accountName: string, subtype: string | null | undefined, connectionName: string | null | undefined): string {
+  if (!connectionName) return accountName;
+  const first = accountName.trim() === connectionName.trim() ? accountTypeLabel(subtype) : accountName;
+  return `${first} · ${connectionName}`;
+}
+
 export function accountTypeLabel(subtype: string | null | undefined): string {
   switch (subtype) {
     case 'CHECKING_ACCOUNT': return 'Conta corrente';
@@ -175,4 +182,18 @@ export function parseDateBR(v: string): string | null {
   const date = new Date(Date.UTC(+y, +mo - 1, +d));
   if (date.getUTCDate() !== +d || date.getUTCMonth() !== +mo - 1 || date.getUTCFullYear() !== +y) return null;
   return `${y}-${mo}-${d}`;
+}
+
+/** T-17: máscara de valor "R$ 0,00" — os dígitos entram pelos centavos ("1234" → "R$ 12,34"). */
+export function maskMoneyInput(raw: string): string {
+  const d = raw.replace(/\D/g, '').replace(/^0+/, '').slice(0, 11);
+  const cents = Number(d || '0');
+  const int = Math.floor(cents / 100).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  return `R$${NBSP}${int},${(cents % 100).toString().padStart(2, '0')}`;
+}
+
+/** "R$ 1.234,56" → 1234.56 (sempre positivo; o sinal vem de "Saída"/"Entrada"). */
+export function parseMoneyInput(text: string): number {
+  const d = text.replace(/\D/g, '');
+  return d ? Number(d) / 100 : 0;
 }

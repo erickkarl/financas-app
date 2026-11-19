@@ -2,6 +2,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useState } from 'react';
 import { Linking, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { router, useFocusEffect, useLocalSearchParams, useNavigation } from 'expo-router';
+import { openExtrato } from '../../state/nav';
 import { ActivityIndicator, Card, Dialog, Divider, Icon, List, Portal, Snackbar, Text, TouchableRipple } from 'react-native-paper';
 import { Button, IconButton } from '../../ui/touch';
 import { useApp } from '../../state/AppContext';
@@ -31,9 +32,9 @@ export default function Inicio() {
   const smallIcon = useIconSize(14);
 
   const { data, error, reload } = useLoad(async () => {
-    const [connections, accounts, totals] = await Promise.all([repo.listConnections(), repo.listAccounts(), repo.totalBalance()]);
+    const [connections, accounts, totals, wealth] = await Promise.all([repo.listConnections(), repo.listAccounts(), repo.totalBalance(), repo.wealthNow()]);
     const groups: Group[] = connections.map((c) => ({ conn: c, accounts: accounts.filter((a) => a.item_id === c.item_id) }));
-    return { connections, accounts, totals, groups };
+    return { connections, accounts, totals, groups, wealth };
   });
   // Recarrega ao voltar para o Início (dados podem ter mudado em outra tela).
   useFocusEffect(useCallback(() => { reload(); }, [])); // eslint-disable-line react-hooks/exhaustive-deps
@@ -84,7 +85,8 @@ export default function Inicio() {
   }
   if (!data) return <View style={{ padding: 16 }}><Skeleton lines={4} /></View>;
 
-  const { connections, groups, totals } = data;
+  const { connections, groups, totals, wealth } = data;
+  const hasInvestments = wealth.byConnection.some((c) => c.investments > 0);
 
   // Vazio (RF-004.2): sem conexões e sem lançamentos; sem cartão de saldo zerado.
   if (connections.length === 0 && !totals.hasManual) {
@@ -118,6 +120,16 @@ export default function Inicio() {
   const expiredOrigins = views.filter((v) => (v.conn.replaced_at || authValidity(v.conn.auth_expires_at).state === 'expired') && v.conn.origin_updated_at).map((v) => v.conn.origin_updated_at as string).sort();
   const origins = connections.map((c) => c.origin_updated_at).filter(Boolean).sort() as string[];
   const latestOrigin = origins.length ? new Date(origins[origins.length - 1]) : null;
+  const oldestOrigin = origins.length ? new Date(origins[0]) : null;
+  // UX 0.15 (E-10 a): cada valor com "Dados de {parte mais antiga}"; topo com o intervalo quando as horas diferem.
+  const oldestOf = (list: (string | null)[]) => { const v = list.filter(Boolean).sort() as string[]; return v.length ? new Date(v[0]) : null; };
+  const bankOrigin = oldestOf(views.filter((v) => !v.conn.duplicate_of && v.accounts.some((a) => a.type === 'BANK')).map((v) => v.conn.origin_updated_at));
+  const invOrigin = oldestOf(wealth.byConnection.filter((c) => c.investments > 0).map((c) => c.origin));
+  const allOrigin = oldestOf([bankOrigin?.toISOString() ?? null, invOrigin?.toISOString() ?? null]);
+  const dataLine = (d: Date | null) => (d ? <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>{`Dados de ${formatWhen(d)}`}</Text> : null);
+  const rangeLine = latestOrigin && oldestOrigin && formatWhen(oldestOrigin) !== formatWhen(latestOrigin)
+    ? `Atualizado entre ${formatWhen(oldestOrigin)} e ${formatWhen(latestOrigin)}`
+    : latestOrigin ? formatUpdated(latestOrigin) : null;
   const bank = views.flatMap((v) => v.accounts.filter((a) => a.type === 'BANK').map((a) => ({ a, conn: v.conn })));
   const cards = views.flatMap((v) => v.accounts.filter((a) => a.type === 'CREDIT').map((a) => ({ a, conn: v.conn })));
   const unauthorizedCount = bank.filter(({ a }) => a.unauthorized_at).length;
@@ -146,7 +158,7 @@ export default function Inicio() {
             <View style={ui.row} accessibilityLiveRegion="polite">
               {refreshing ? <ActivityIndicator size={14} /> : <Icon source="clock-outline" size={smallIcon} color={theme.colors.onSurfaceVariant} />}
               <Text variant="bodySmall" style={{ marginLeft: 6, color: theme.colors.onSurfaceVariant }}>
-                {refreshing ? 'Atualizando…' : latestOrigin ? formatUpdated(latestOrigin) : 'Ainda sem dados do banco'}
+                {refreshing ? 'Atualizando…' : rangeLine ?? 'Ainda sem dados do banco'}
               </Text>
             </View>
           </TouchableRipple>
@@ -161,10 +173,37 @@ export default function Inicio() {
           ) : (
             <Card mode="contained" style={s.total}>
               <Card.Content>
-                <Text variant="labelLarge">Saldo total</Text>
-                <Text variant="displaySmall" style={ui.tabular} accessibilityLabel={`Saldo total, ${balanceA11y(totals.total)}`}>{formatBalance(totals.total)}</Text>
+                {/* UX 0.7 (RF-004.1, RF-004.3): "Saldo em contas"; com investimentos, três linhas e "Patrimônio total". */}
+                {hasInvestments ? (
+                  <View style={{ gap: 2 }}>
+                    <View accessible accessibilityLabel={`Saldo em contas, ${balanceA11y(totals.total)}${bankOrigin ? `, dados de ${formatWhen(bankOrigin)}` : ''}`}>
+                      <View style={s.cardLine}>
+                        <Text variant="bodyLarge">Saldo em contas</Text>
+                        <Text variant="titleMedium" style={ui.tabular}>{formatBalance(totals.total)}</Text>
+                      </View>
+                      {dataLine(bankOrigin)}
+                    </View>
+                    <View accessible accessibilityLabel={`Investimentos, ${balanceA11y(wealth.investments)}${invOrigin ? `, dados de ${formatWhen(invOrigin)}` : ''}`}>
+                      <View style={s.cardLine}>
+                        <Text variant="bodyLarge">Investimentos</Text>
+                        <Text variant="titleMedium" style={ui.tabular}>{formatBalance(wealth.investments)}</Text>
+                      </View>
+                      {dataLine(invOrigin)}
+                    </View>
+                    <Divider style={{ marginVertical: 4 }} />
+                    <Text variant="labelLarge">Patrimônio total</Text>
+                    <Text variant="displaySmall" style={ui.tabular} accessibilityLabel={`Patrimônio total, ${balanceA11y(wealth.total)}${allOrigin ? `, dados de ${formatWhen(allOrigin)}` : ''}`}>{formatBalance(wealth.total)}</Text>
+                    {dataLine(allOrigin)}
+                  </View>
+                ) : (
+                  <>
+                    <Text variant="labelLarge">Saldo em contas</Text>
+                    <Text variant="displaySmall" style={ui.tabular} accessibilityLabel={`Saldo em contas, ${balanceA11y(totals.total)}${bankOrigin ? `, dados de ${formatWhen(bankOrigin)}` : ''}`}>{formatBalance(totals.total)}</Text>
+                    {dataLine(bankOrigin)}
+                  </>
+                )}
                 <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
-                  {`Soma das suas contas. Cartões de crédito não entram.${unauthorizedCount > 0 ? ` Não inclui ${unauthorizedCount} ${unauthorizedCount === 1 ? 'conta sem autorização' : 'contas sem autorização'}.` : ''}`}
+                  {`Saldo em contas soma suas contas. Cartões de crédito não entram.${hasInvestments ? ' Faturas de cartão não são descontadas do patrimônio.' : ''}${unauthorizedCount > 0 ? ` Não inclui ${unauthorizedCount} ${unauthorizedCount === 1 ? 'conta sem autorização' : 'contas sem autorização'}.` : ''}`}
                 </Text>
                 {expiredOrigins.length > 0 && (
                   <View style={[ui.row, { marginTop: 4 }]}>
@@ -177,6 +216,9 @@ export default function Inicio() {
                     <Icon source="alert-outline" size={smallIcon} color={theme.colors.atencao} />
                     <Text variant="bodySmall" style={{ color: theme.colors.atencao, marginLeft: 4, flexShrink: 1 }}>Inclui dados que não foram atualizados.</Text>
                   </View>
+                )}
+                {connections.length > 0 && (
+                  <Button compact onPress={() => router.push('/patrimonio')} style={{ alignSelf: 'flex-start', marginTop: 4 }}>Ver evolução do patrimônio</Button>
                 )}
               </Card.Content>
             </Card>
@@ -235,7 +277,7 @@ export default function Inicio() {
                       description={`Sem autorização · dados de ${formatWhen(new Date(a.unauthorized_at))}\nNão entra no saldo`}
                       left={(p) => <List.Icon {...p} icon="link-off" />}
                       right={() => <Text variant="titleMedium" style={[ui.tabular, s.value, { color: theme.colors.onSurfaceVariant }]}>{formatBalance(a.balance)}</Text>}
-                      onPress={() => router.push({ pathname: '/extrato', params: { account: a.id } })}
+                      onPress={() => openExtrato({ account: a.id })}
                       accessibilityLabel={`${a.name}, sem autorização, dados de ${formatWhen(new Date(a.unauthorized_at))}, ${balanceA11y(a.balance)}, não entra no saldo`}
                       style={s.minTouch}
                     />
@@ -247,9 +289,9 @@ export default function Inicio() {
                     descriptionNumberOfLines={3}
                     key={a.id}
                     title={a.name === name ? accountTypeLabel(a.subtype) : a.name}
-                    description={a.number ? `final ${isMaskingValues() ? '••••' : a.number.slice(-4)}` : undefined}
+                    description={[a.number ? `final ${isMaskingValues() ? '••••' : a.number.slice(-4)}` : null, autoInvestLine(a)].filter(Boolean).join('\n') || undefined}
                     right={() => <Text variant="titleMedium" style={[ui.tabular, s.value]} accessibilityLabel={balanceA11y(a.balance)}>{formatBalance(a.balance)}</Text>}
-                    onPress={() => router.push({ pathname: '/extrato', params: { account: a.id } })}
+                    onPress={() => openExtrato({ account: a.id })}
                     accessibilityLabel={`${a.name === name ? accountTypeLabel(a.subtype) : a.name}${a.number ? `, final ${isMaskingValues() ? '••••' : a.number.slice(-4)}` : ''}, saldo ${balanceA11y(a.balance)}`}
                     style={s.minTouch}
                   />
@@ -258,6 +300,28 @@ export default function Inicio() {
               </View>
             );
           })}
+
+          {/* UX 0.7: seção Investimentos, uma linha por conexão (sem ativos, sem rentabilidade). Toque abre T-21. */}
+          {hasInvestments && <SectionTitle>Investimentos</SectionTitle>}
+          {hasInvestments && wealth.byConnection.map((c) => (
+            <View key={c.item_id}>
+              {c.investments > 0 && (
+                <List.Item
+                  titleNumberOfLines={3}
+                  title={c.name}
+                  description="Investimentos"
+                  right={() => <Text variant="titleMedium" style={[ui.tabular, s.value]}>{formatBalance(c.investments)}</Text>}
+                  onPress={() => router.push('/patrimonio')}
+                  accessibilityLabel={`${c.name}, investimentos, ${balanceA11y(c.investments)}`}
+                  style={s.minTouch}
+                />
+              )}
+              {/* UX 0.8 (E-5 a): só informação, fora da soma. */}
+              {c.autoInvested > 0 && (
+                <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant, paddingHorizontal: 16, paddingBottom: 8 }}>{`Rendendo na conta: ${formatBalance(c.autoInvested)}. Já contado em Saldo em contas.`}</Text>
+              )}
+            </View>
+          ))}
 
           {cards.length > 0 && <SectionTitle>Cartões de crédito</SectionTitle>}
           {cards.map(({ a }) => (
@@ -268,7 +332,7 @@ export default function Inicio() {
               title={a.name}
               description={`Fatura atual${a.due_date ? ` · vence em ${formatDate(new Date(a.due_date))}` : ''}`}
               right={() => <Text variant="titleMedium" style={[ui.tabular, s.value]}>{formatBalance(a.balance)}</Text>}
-              onPress={() => router.push({ pathname: '/extrato', params: { account: a.id } })}
+              onPress={() => openExtrato({ account: a.id })}
               accessibilityLabel={`${a.name}, fatura atual ${balanceA11y(a.balance)}`}
               style={s.minTouch}
             />
@@ -282,7 +346,7 @@ export default function Inicio() {
                 descriptionNumberOfLines={3}
                 title="Dinheiro"
                 right={() => <Text variant="titleMedium" style={[ui.tabular, s.value]}>{formatBalance(totals.manual)}</Text>}
-                onPress={() => router.push({ pathname: '/extrato', params: { account: 'manual' } })}
+                onPress={() => openExtrato({ account: 'manual' })}
                 style={s.minTouch}
               />
             </>
@@ -323,7 +387,15 @@ export default function Inicio() {
   );
 }
 
+/** UX 0.8/0.9 (RF-004.4): "Inclui R$ X rendendo na conta" ou "Todo o saldo rende na conta". */
+function autoInvestLine(a: { balance: number; auto_invested: number | null }): string | null {
+  const v = a.auto_invested ?? 0;
+  if (v <= 0) return null;
+  return Math.round(v * 100) >= Math.round(a.balance * 100) ? 'Todo o saldo rende na conta' : `Inclui ${formatBalance(v)} rendendo na conta`;
+}
+
 const s = StyleSheet.create({
+  cardLine: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
   statusLine: { minHeight: 48, justifyContent: 'center' },
   total: { marginVertical: 8 },
   group: { marginBottom: 4 },

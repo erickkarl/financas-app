@@ -9,8 +9,8 @@ const { DatabaseSync } = require('node:sqlite') as {
   };
 };
 
-export function createNodeDb(): Db {
-  const db = new DatabaseSync(':memory:');
+export function createNodeDb(path = ':memory:'): Db {
+  const db = new DatabaseSync(path);
   let depth = 0;
   return {
     async execAsync(sql) {

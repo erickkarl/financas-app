@@ -12,6 +12,7 @@ export default function Ajustes() {
   const theme = useAppTheme();
   const { repo, credStatus, screenLock, dataVersion } = useApp();
   const { data: count } = useLoad(() => repo.countConnections(), [dataVersion]);
+  const { data: remembered } = useLoad(() => repo.countRemembered(), [dataVersion]);
 
   return (
     <Screen>
@@ -38,6 +39,15 @@ export default function Ajustes() {
           description={screenLock ? 'Sempre ligado. Usa a biometria ou o bloqueio do aparelho.' : 'Este aparelho não tem bloqueio de tela.'}
           descriptionNumberOfLines={3}
           left={(p) => <List.Icon {...p} icon={screenLock ? 'lock-outline' : 'alert-outline'} color={screenLock ? p.color : theme.colors.atencao} />}
+          style={{ minHeight: 56 }}
+        />
+        {/* UX 0.17 (RF-006.3): T-22. */}
+        <List.Item
+          title="Categorias lembradas"
+          description={remembered ? `${remembered} ${remembered === 1 ? 'destinatário' : 'destinatários'}` : 'Nenhuma'}
+          left={(p) => <List.Icon {...p} icon="tag-heart-outline" />}
+          right={(p) => <List.Icon {...p} icon="chevron-right" />}
+          onPress={() => router.push('/categorias-lembradas')}
           style={{ minHeight: 56 }}
         />
         <List.Item

@@ -1,13 +1,16 @@
 // T-13 Extrato + T-14 Filtros — RF-005, RF-006.1, RF-007.2
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ScrollView, SectionList, StyleSheet, View } from 'react-native';
-import { router, useLocalSearchParams } from 'expo-router';
-import { Chip, Divider, List, Modal, Portal, Text, TextInput, TouchableRipple } from 'react-native-paper';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { recipientFromToken } from '../../state/nav';
+import type { RecipientKey } from '../../domain/recipient';
+import { takeFlash } from '../../state/flash';
+import { Chip, Divider, FAB, List, Modal, Portal, Snackbar, Text, TextInput, TouchableRipple } from 'react-native-paper';
 import { Button } from '../../ui/touch';
 import { useApp } from '../../state/AppContext';
 import { useStartConnect } from '../../state/hooks';
 import { CATEGORIES, NO_CATEGORY } from '../../domain/categories';
-import { formatCount, maskDateInput, parseDateBR, formatDayHeader, formatMonth, formatSignedAmount, spDateKey } from '../../domain/format';
+import { formatBalance, formatCount, maskDateInput, parseDateBR, formatDayHeader, formatMonth, formatSignedAmount, spDateKey } from '../../domain/format';
 import { announce, Banner, EmptyState, FieldError, OptionRow, SearchField, Skeleton, TransactionItem, styles as ui, useAppTheme } from '../../ui/components';
 import type { AccountRow, TransactionRow, TxFilter } from '../../data/repo';
 
@@ -45,8 +48,11 @@ function periodRange(p: Period, now = new Date()): { from?: string; to?: string;
 
 export default function Extrato() {
   const theme = useAppTheme();
-  const params = useLocalSearchParams<{ account?: string; from?: string; to?: string; category?: string }>();
+  const params = useLocalSearchParams<{ account?: string; from?: string; to?: string; category?: string; only?: string; futuras?: string; k?: string; rk?: string }>();
   const { repo, dataVersion, online, credStatus } = useApp();
+  // "Lançamento salvo" ao voltar de T-17.
+  const [saved, setSaved] = useState<string | null>(null);
+  useFocusEffect(useCallback(() => { const m = takeFlash('extrato'); if (m) { setSaved(m); announce(m); } }, []));
   const startConnect = useStartConnect();
 
   const [search, setSearch] = useState('');
@@ -55,10 +61,15 @@ export default function Extrato() {
   const [period, setPeriod] = useState<Period>({ kind: 'none' });
   const [categories, setCategories] = useState<string[]>([]);
   const [showHidden, setShowHidden] = useState(false);
+  // UX 0.14: "Só fora do Resumo" (T-14) e o filtro por motivo da folha "Ver quais" (T-13).
+  const [only, setOnly] = useState<undefined | 'out' | 'transfer' | 'bill'>(undefined);
+  // UX 0.17 (T-22, "Ver lançamentos"): filtro por destinatário, com o chip "Destinatário".
+  const [recipient, setRecipient] = useState<RecipientKey | null>(null);
+  const [reasons, setReasons] = useState(false);
   const [sheet, setSheet] = useState<null | 'conta' | 'periodo' | 'categoria'>(null);
 
   const [rows, setRows] = useState<TransactionRow[] | null>(null);
-  const [sums, setSums] = useState<{ count: number; entradas: number; saidas: number; excluded: number } | null>(null);
+  const [sums, setSums] = useState<Awaited<ReturnType<typeof repo.sums>> | null>(null);
   const [hasMore, setHasMore] = useState(true);
   const [total, setTotal] = useState<number | null>(null);
   const [error, setError] = useState(false);
@@ -66,11 +77,15 @@ export default function Extrato() {
   const loadingMore = useRef(false);
 
   // Filtros vindos de Início (conta) ou do Resumo (mês e categoria)
+  // Cada ida vinda de outra tela traz um marcador novo (k): os filtros anteriores saem e entram só os pedidos.
   useEffect(() => {
+    if (params.k) { setAccountIds([]); setPeriod({ kind: 'none' }); setCategories([]); setOnly(undefined); setSearch(''); setShowHidden(false); setFuturesOpen(false); setRecipient(recipientFromToken(params.rk)); }
     if (params.account) setAccountIds([params.account]);
     if (params.from && params.to) setPeriod({ kind: 'custom', from: params.from, to: params.to });
     if (params.category) setCategories([params.category]);
-  }, [params.account, params.from, params.to, params.category]);
+    if (params.only === 'out' || params.only === 'bill') setOnly(params.only);
+    if (params.futuras === '1') setFuturesOpen(true);
+  }, [params.k, params.rk, params.account, params.from, params.to, params.category, params.only, params.futuras]);
 
   // Busca começa 300 ms depois da última tecla.
   useEffect(() => {
@@ -80,16 +95,20 @@ export default function Extrato() {
 
   const range = periodRange(period);
   const filter: TxFilter = useMemo(
-    () => ({ accountIds, from: range.from, to: range.to, categories, search: debounced, showHidden }),
+    () => ({ accountIds, from: range.from, to: range.to, categories, search: debounced, showHidden, only, recipient: recipient ?? undefined }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [accountIds, range.from, range.to, categories, debounced, showHidden],
+    [accountIds, range.from, range.to, categories, debounced, showHidden, only, recipient],
   );
   // RF-005.3: futuras (data depois de hoje) num grupo próprio, fora das somas e da lista principal.
   const today = spDateKey(new Date());
   const [futures, setFutures] = useState<TransactionRow[]>([]);
   const [futuresOpen, setFuturesOpen] = useState(false);
 
+  // C2-12 (revisão 3): várias cargas podem estar em andamento quando os filtros mudam de uma vez (ida vinda do Resumo).
+  // Só a mais recente vale; sem isso, uma carga antiga sem filtro terminava depois e trocava a lista e as futuras.
+  const loadSeq = useRef(0);
   const load = useCallback(async () => {
+    const mine = ++loadSeq.current;
     try {
       const [first, s, all, accs, fut] = await Promise.all([
         repo.listTransactions({ ...filter, future: 'exclude', today }, PAGE, 0),
@@ -98,6 +117,7 @@ export default function Extrato() {
         repo.listAccounts(),
         repo.listTransactions({ ...filter, future: 'only', today }, 500, 0),
       ]);
+      if (mine !== loadSeq.current) return;
       setRows(first);
       setFutures([...fut].reverse()); // da mais próxima para a mais distante
       // Resultado só com futuras: o grupo abre sozinho.
@@ -109,7 +129,7 @@ export default function Extrato() {
       setError(false);
       announce(`${formatCount(s.count)} ${s.count === 1 ? 'transação' : 'transações'}`);
     } catch {
-      setError(true);
+      if (mine === loadSeq.current) setError(true);
     }
   }, [repo, filter, today]);
 
@@ -120,7 +140,9 @@ export default function Extrato() {
   async function loadMore() {
     if (!rows || !hasMore || loadingMore.current) return;
     loadingMore.current = true;
+    const mine = loadSeq.current;
     const next = await repo.listTransactions({ ...filter, future: 'exclude', today }, PAGE, rows.length);
+    if (mine !== loadSeq.current) { loadingMore.current = false; return; }
     setRows([...rows, ...next]);
     setHasMore(next.length === PAGE);
     loadingMore.current = false;
@@ -142,7 +164,7 @@ export default function Extrato() {
     return new Set([...seen.entries()].filter(([, n]) => n > 1).map(([k]) => k));
   }, [accounts]);
 
-  const anyFilter = accountIds.length > 0 || period.kind !== 'none' || categories.length > 0 || debounced.trim() !== '';
+  const anyFilter = accountIds.length > 0 || period.kind !== 'none' || categories.length > 0 || debounced.trim() !== '' || Boolean(only) || Boolean(recipient);
   const clearAll = () => {
     setAccountIds([]);
     setPeriod({ kind: 'none' });
@@ -150,10 +172,12 @@ export default function Extrato() {
     setSearch('');
     setDebounced('');
     setShowHidden(false);
+    setOnly(undefined);
+    setRecipient(null);
   };
 
   const accountLabel = accountIds.length === 1 ? accounts.find((a) => a.id === accountIds[0])?.name ?? 'Conta' : accountIds.length > 1 ? `${accountIds.length} contas` : null;
-  const categoryLabel = categories.length === 1
+  const categoryLabel = only === 'out' ? 'Fora do Resumo' : only === 'transfer' ? 'Transferências' : only === 'bill' ? 'Pagamentos de fatura' : categories.length === 1
     ? categories[0] === 'none' ? NO_CATEGORY.name : CATEGORIES.find((c) => c.id === categories[0])?.name ?? 'Categoria'
     : categories.length > 1 ? `${categories.length} categorias` : null;
 
@@ -165,14 +189,31 @@ export default function Extrato() {
       <View style={s.chips}>
         <TouchableRipple onPress={() => setSheet('conta')} accessibilityRole="button" accessibilityLabel={`Filtro ${accountLabel ?? 'Conta'}`} style={s.chipHit}><Chip importantForAccessibility="no" accessible={false} pointerEvents="box-none" mode="outlined" selected={!!accountLabel} onClose={accountLabel ? () => setAccountIds([]) : undefined} closeIconAccessibilityLabel="Limpar filtro de conta" style={s.chip}>{accountLabel ?? 'Conta'}</Chip></TouchableRipple>
         <TouchableRipple onPress={() => setSheet('periodo')} accessibilityRole="button" accessibilityLabel={`Filtro ${range.label ?? 'Período'}`} style={s.chipHit}><Chip importantForAccessibility="no" accessible={false} pointerEvents="box-none" mode="outlined" selected={period.kind !== 'none'} onClose={period.kind !== 'none' ? () => setPeriod({ kind: 'none' }) : undefined} closeIconAccessibilityLabel="Limpar filtro de período" style={s.chip}>{range.label ?? 'Período'}</Chip></TouchableRipple>
-        <TouchableRipple onPress={() => setSheet('categoria')} accessibilityRole="button" accessibilityLabel={`Filtro ${categoryLabel ?? 'Categoria'}`} style={s.chipHit}><Chip importantForAccessibility="no" accessible={false} pointerEvents="box-none" mode="outlined" selected={!!categoryLabel} onClose={categoryLabel ? () => setCategories([]) : undefined} closeIconAccessibilityLabel="Limpar filtro de categoria" style={s.chip}>{categoryLabel ?? 'Categoria'}</Chip></TouchableRipple>
+        <TouchableRipple onPress={() => setSheet('categoria')} accessibilityRole="button" accessibilityLabel={`Filtro ${categoryLabel ?? 'Categoria'}`} style={s.chipHit}><Chip importantForAccessibility="no" accessible={false} pointerEvents="box-none" mode="outlined" selected={!!categoryLabel} onClose={categoryLabel ? () => { setCategories([]); setOnly(undefined); } : undefined} closeIconAccessibilityLabel="Limpar filtro de categoria" style={s.chip}>{categoryLabel ?? 'Categoria'}</Chip></TouchableRipple>
+        {recipient && (
+          <TouchableRipple onPress={() => undefined} accessibilityRole="text" accessibilityLabel="Filtro Destinatário" style={s.chipHit}><Chip importantForAccessibility="no" accessible={false} pointerEvents="box-none" mode="outlined" selected onClose={() => setRecipient(null)} closeIconAccessibilityLabel="Limpar filtro de destinatário" style={s.chip}>Destinatário</Chip></TouchableRipple>
+        )}
         {anyFilter && <Button compact onPress={clearAll}>Limpar filtros</Button>}
       </View>
       {sums && (
         <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }} accessibilityLiveRegion="polite">
-          {`${formatCount(sums.count)} ${sums.count === 1 ? 'transação' : 'transações'} · Entradas ${formatSignedAmount(sums.entradas)} · Saídas ${formatSignedAmount(sums.saidas)}`}
-          {sums.excluded > 0 ? `\nNão inclui ${sums.excluded} ${futures.length ? 'ocultas, transferências, investimentos ou futuras' : 'ocultas, transferências ou investimentos'}.` : ''}
+          {only === 'out'
+            // UX 0.16 (C2-07): com "Só fora do Resumo", a soma dos marcados, sem sinal e em cor neutra, para conferir com o Resumo.
+            ? `${formatCount(sums.out.count)} ${sums.out.count === 1 ? 'lançamento' : 'lançamentos'} fora do Resumo · Saídas ${formatBalance(sums.out.saidas)}${sums.out.entradas > 0 ? ` · Entradas ${formatBalance(sums.out.entradas)}` : ''}`
+            : `${formatCount(sums.count)} ${sums.count === 1 ? 'transação' : 'transações'} · Entradas ${formatSignedAmount(sums.entradas)} · Saídas ${formatSignedAmount(sums.saidas)}`
+              // UX 0.17 (RF-008.10): o estorno no cartão não entra em "Entradas"; reduz "Saídas".
+              + (sums.refunds > 0 ? `\nSaídas já descontam ${formatCount(sums.refunds)} ${sums.refunds === 1 ? 'estorno' : 'estornos'}.` : '')}
         </Text>
+      )}
+      {/* UX 0.14 (E-8 a): "Fora das somas: {k} lançamentos" + "Ver quais", com a contagem por motivo (N-1).
+          UX 0.16: não aparece com "Só fora do Resumo"; as ocultas contam mesmo sem "Mostrar ocultas" (E-11 a). */}
+      {sums && only !== 'out' && (sums.excluded + futures.length) > 0 && (
+        <View style={[ui.row, { justifyContent: 'space-between', flexWrap: 'wrap' }]}>
+          <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant, flexShrink: 1 }}>
+            {`Fora das somas: ${formatCount(sums.excluded + (sums.byReason.future > 0 ? 0 : futures.length))} ${(sums.excluded + (sums.byReason.future > 0 ? 0 : futures.length)) === 1 ? 'lançamento' : 'lançamentos'}`}
+          </Text>
+          <Button compact onPress={() => setReasons(true)}>Ver quais</Button>
+        </View>
       )}
       {futures.length > 0 && (
         <View>
@@ -222,6 +263,42 @@ export default function Extrato() {
         windowSize={10}
       />
 
+      {/* RF-007: botão flutuante "+" (T-13, item 6). */}
+      <FAB icon="plus" accessibilityLabel="Novo lançamento manual" onPress={() => router.push('/lancamento')} style={s.fab} />
+      <Snackbar visible={Boolean(saved)} onDismiss={() => setSaved(null)} duration={4000}>{saved}</Snackbar>
+
+      <Portal>
+        <Modal visible={reasons} onDismiss={() => setReasons(false)} contentContainerStyle={[s.reasonSheet, { backgroundColor: theme.colors.surface }]}>
+          <Text variant="titleLarge" accessibilityRole="header">Fora das somas</Text>
+          {sums && ([
+            ['hidden', 'Ocultas', sums.byReason.hidden],
+            ['future', 'Futuras', sums.byReason.future || futures.length],
+            ['transfer', 'Transferências entre suas contas', sums.byReason.transfer],
+            ['investments', 'Investimentos', sums.byReason.investments],
+            ['out', 'Fora do Resumo', sums.byReason.out],
+          ] as [string, string, number][]).filter(([, , n]) => n > 0).map(([k, label, n]) => (
+            <List.Item
+              key={k}
+              title={label}
+              right={() => <Text variant="titleMedium" style={ui.tabular}>{formatCount(n)}</Text>}
+              accessibilityLabel={`${label}, ${n}. Toque para filtrar`}
+              onPress={() => {
+                setReasons(false);
+                // Tocar num motivo filtra o Extrato por ele.
+                if (k === 'hidden') { setShowHidden(true); setOnly(undefined); }
+                if (k === 'future') setFuturesOpen(true);
+                if (k === 'transfer') setOnly('transfer');
+                if (k === 'investments') { setCategories(['investimentos']); setOnly(undefined); }
+                if (k === 'out') setOnly('out');
+              }}
+              style={{ minHeight: 56 }}
+            />
+          ))}
+          <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>Cada lançamento conta em um motivo só, nesta ordem.</Text>
+          <Button onPress={() => setReasons(false)} style={{ alignSelf: 'flex-end' }}>Fechar</Button>
+        </Modal>
+      </Portal>
+
       <FilterSheets
         sheet={sheet}
         onClose={() => setSheet(null)}
@@ -234,6 +311,8 @@ export default function Extrato() {
         onCategories={setCategories}
         showHidden={showHidden}
         onShowHidden={setShowHidden}
+        onlyOut={only === 'out'}
+        onOnlyOut={(v) => setOnly(v ? 'out' : undefined)}
       />
     </View>
   );
@@ -251,6 +330,8 @@ function FilterSheets(props: {
   onCategories: (v: string[]) => void;
   showHidden: boolean;
   onShowHidden: (v: boolean) => void;
+  onlyOut: boolean;
+  onOnlyOut: (v: boolean) => void;
 }) {
   const theme = useAppTheme();
   const { sheet, onClose } = props;
@@ -263,6 +344,7 @@ function FilterSheets(props: {
   const [toError, setToError] = useState<string | null>(null);
   const [cats, setCats] = useState<string[]>([]);
   const [hidden, setHidden] = useState(false);
+  const [outOnly, setOutOnly] = useState(false);
 
   useEffect(() => {
     if (!sheet) return;
@@ -274,6 +356,7 @@ function FilterSheets(props: {
     setToError(null);
     setCats(props.categories);
     setHidden(props.showHidden);
+    setOutOnly(props.onlyOut);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sheet]);
 
@@ -284,6 +367,7 @@ function FilterSheets(props: {
     if (sheet === 'categoria') {
       props.onCategories(cats);
       props.onShowHidden(hidden);
+      props.onOnlyOut(outOnly);
     }
     if (sheet === 'periodo') {
       if (per === 'custom') {
@@ -306,6 +390,7 @@ function FilterSheets(props: {
     if (sheet === 'categoria') {
       setCats([]);
       setHidden(false);
+      setOutOnly(false);
     }
   }
 
@@ -353,6 +438,7 @@ function FilterSheets(props: {
                   <OptionRow key={c.id} kind="checkbox" label={c.name} checked={cats.includes(c.id)} onPress={() => setCats(toggle(cats, c.id))} />
                 ))}
                 <Divider />
+                <OptionRow kind="switch" label="Só fora do Resumo" checked={outOnly} onPress={() => setOutOnly(!outOnly)} />
                 <OptionRow kind="switch" label="Mostrar ocultas" checked={hidden} onPress={() => setHidden(!hidden)} />
               </>
             )}
@@ -368,6 +454,8 @@ function FilterSheets(props: {
 }
 
 const s = StyleSheet.create({
+  reasonSheet: { marginTop: 'auto', padding: 16, borderTopLeftRadius: 28, borderTopRightRadius: 28, gap: 4 },
+  fab: { position: 'absolute', right: 16, bottom: 16 },
   list: { paddingHorizontal: 16, paddingBottom: 24, maxWidth: 640, width: '100%', alignSelf: 'center' },
   header: { gap: 8, paddingTop: 8 },
   search: { marginTop: 4 },

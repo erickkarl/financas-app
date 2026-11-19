@@ -42,6 +42,7 @@ export default function TabsLayout() {
     >
       <Tabs.Screen name="index" options={{ title: 'Início', tabBarIcon: ({ color, size, focused }) => <TabIcon icon="home-outline" color={String(color)} size={size} focused={focused} /> }} />
       <Tabs.Screen name="extrato" options={{ title: 'Extrato', tabBarIcon: ({ color, size, focused }) => <TabIcon icon="format-list-bulleted" color={String(color)} size={size} focused={focused} /> }} />
+      <Tabs.Screen name="resumo" options={{ title: 'Resumo', tabBarIcon: ({ color, size, focused }) => <TabIcon icon="chart-box-outline" color={String(color)} size={size} focused={focused} /> }} />
       <Tabs.Screen name="ajustes" options={{ title: 'Ajustes', tabBarIcon: ({ color, size, focused }) => <TabIcon icon="cog-outline" color={String(color)} size={size} focused={focused} /> }} />
     </Tabs>
   );

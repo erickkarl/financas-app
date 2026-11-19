@@ -2,6 +2,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Linking, ScrollView, View } from 'react-native';
 import { router, useFocusEffect, useLocalSearchParams, useNavigation } from 'expo-router';
+import { openExtrato } from '../../state/nav';
 import { ActivityIndicator, Dialog, Divider, HelperText, List, Portal, Text, TextInput } from 'react-native-paper';
 import { Button, IconButton } from '../../ui/touch';
 import { useApp } from '../../state/AppContext';
@@ -47,7 +48,8 @@ export default function ConexaoDetalhe() {
     const accounts = (await repo.listAccounts()).filter((a) => a.item_id === id);
     const other = c?.duplicate_of ? await repo.getConnection(c.duplicate_of) : null;
     const sharing = c ? await repo.accountSharing(id) : { shared: [], exclusive: [] };
-    return { c, accounts, other, sharing };
+    const remembered = await repo.countRemembered();
+    return { c, accounts, other, sharing, remembered };
   }, [id]);
   const [refreshMsg, setRefreshMsg] = useState<string | null>(null);
   const [updating, setUpdating] = useState(false);
@@ -171,13 +173,15 @@ export default function ConexaoDetalhe() {
       await client.deleteItem(id);
       // Repetida: o nome da antiga passa para a nova, se a nova usa o nome sugerido [UX 0.8; UX-072].
       if (c?.duplicate_of) await repo.passNameOnRevoke(id, c.duplicate_of);
+      // RF-016.7: a série do patrimônio é recalculada sem esta instituição.
+      const hadWealth = (await repo.wealthSeries()).length > 0 && Boolean(c?.investments_count);
       const res = await repo.deleteConnectionData(id);
       const label = name.startsWith('Conexão ') ? name : `Conexão ${name}`;
       // [0.10] REV-32: revogar a antiga ao fim de "Autorizar de novo".
       const renewedInto = renovacao && c?.duplicate_of ? await repo.getConnection(c.duplicate_of) : null;
       const left = await repo.countConnections();
       if (renewedInto) setFlash('conexoes', `Autorização antiga revogada. ${renewedInto.name} continua no app, com ${left} de 5 conexões.`);
-      else setFlash('conexoes', revokedMessage(label, res.kept, res.keptWith));
+      else setFlash('conexoes', revokedMessage(label, res.kept, res.keptWith) + (hadWealth ? ` O histórico do patrimônio agora não inclui ${name}.` : ''));
       setConfirm(false);
       bump();
       router.replace('/conexoes');
@@ -268,7 +272,7 @@ export default function ConexaoDetalhe() {
               description={`Sem autorização · dados de ${formatWhen(new Date(a.unauthorized_at))}\nNão entra no saldo`}
               left={(p) => <List.Icon {...p} icon="link-off" />}
               right={() => <Text variant="titleMedium" style={[ui.tabular, { alignSelf: 'center', color: theme.colors.onSurfaceVariant }]} accessibilityLabel={`${balanceA11y(a.balance)}, não entra no saldo`}>{formatBalance(a.balance)}</Text>}
-              onPress={() => router.push({ pathname: '/extrato', params: { account: a.id } })}
+              onPress={() => openExtrato({ account: a.id })}
               accessibilityLabel={`${a.name}, sem autorização, dados de ${formatWhen(new Date(a.unauthorized_at))}, ${balanceA11y(a.balance)}, não entra no saldo`}
               style={{ minHeight: 56 }}
             />
@@ -282,7 +286,7 @@ export default function ConexaoDetalhe() {
             title={a.name}
             description={a.type === 'CREDIT' ? `Fatura atual${a.due_date ? ` · vence em ${formatDate(new Date(a.due_date))}` : ''}` : a.number ? `final ${isMaskingValues() ? '••••' : a.number.slice(-4)}` : undefined}
             right={() => <Text variant="titleMedium" style={[ui.tabular, { alignSelf: 'center' }]} accessibilityLabel={a.type === 'CREDIT' ? `Fatura atual ${balanceA11y(a.balance)}` : balanceA11y(a.balance)}>{formatBalance(a.balance)}</Text>}
-            onPress={() => router.push({ pathname: '/extrato', params: { account: a.id } })}
+            onPress={() => openExtrato({ account: a.id })}
             style={{ minHeight: 56 }}
           />
         ))}
@@ -381,7 +385,11 @@ export default function ConexaoDetalhe() {
                 <>
                   <Text variant="bodyMedium">O app para de importar dados desta instituição.</Text>
                   <Text variant="bodyMedium">As contas e transações dela são apagadas deste aparelho, com as categorias que você mudou nelas.</Text>
+                  {/* RF-016.7 (UX 0.7): só se a conexão trouxe investimentos. */}
+                  {Boolean(data.c?.investments_count) && <Text variant="bodyMedium">Os investimentos dela e a parte dela no histórico do seu patrimônio também são apagados. O gráfico passa a mostrar o patrimônio sem esta instituição.</Text>}
                   <Text variant="bodyMedium">O consentimento que você deu no Meu Pluggy continua ativo. Ele só se encerra lá.</Text>
+                  {/* UX 0.17 (RF-006.3.5, N-8): as lembranças ficam. */}
+                  {data.remembered > 0 && <Text variant="bodyMedium">As categorias que o app lembra por destinatário continuam neste aparelho. Para esquecê-las, vá em Ajustes → Categorias lembradas.</Text>}
                   <FieldError text={revokeError} />
                 </>
               )

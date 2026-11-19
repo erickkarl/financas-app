@@ -192,7 +192,7 @@ describe('somas do extrato (PM-7, PM-8, R-3)', () => {
     expect((await repo.getTransaction('t3'))?.transfer).toBe(1);
     expect((await repo.getTransaction('t5'))?.transfer).toBe(1);
     let s = await repo.sums({});
-    expect(s).toEqual({ count: 6, entradas: 5000, saidas: -239.9, excluded: 3 });
+    expect(s).toMatchObject({ count: 6, entradas: 5000, saidas: -239.9, excluded: 3, byReason: { hidden: 0, future: 0, transfer: 2, investments: 1, out: 0 } });
     await repo.setHidden('t6', true); // UX-039
     s = await repo.sums({});
     expect(s.saidas).toBe(-89.9);
@@ -200,7 +200,7 @@ describe('somas do extrato (PM-7, PM-8, R-3)', () => {
     await repo.setHidden('t6', false);
     expect((await repo.sums({})).saidas).toBe(-239.9);
   });
-  test('PM-8/R-2: sinal do Pluggy (pagamento de fatura) marca transferência mesmo sem par; reserva por valor segue valendo', async () => {
+  test('R-8.2 (v1.18): pagamento de fatura (05100000) sozinho NÃO é transferência própria; o par por valor segue valendo; a marcação manual prevalece', async () => {
     const world = baseWorld();
     // pagamento de fatura na conta, sem a entrada correspondente no cartão
     world.txs.cc.push(tx('t7', 'cc', '2026-11-14T15:00:00Z', 820, 'DEBIT', '05100000', 'Pagamento fatura'));
@@ -209,12 +209,12 @@ describe('somas do extrato (PM-7, PM-8, R-3)', () => {
     world.txs.poup.push(tx('t9', 'poup', '2026-11-16T15:00:00Z', 75, 'CREDIT', null, 'TED recebida'));
     const { db, repo, client } = await setup(world);
     await syncConnection(db, repo, client, 'item-1');
-    expect((await repo.getTransaction('t7'))?.transfer).toBe(1);
+    expect((await repo.getTransaction('t7'))?.transfer).toBe(0); // fica o aviso da fatura no Resumo (R-2)
     expect((await repo.getTransaction('t8'))?.transfer).toBe(1);
     expect((await repo.getTransaction('t9'))?.transfer).toBe(1);
-    await repo.setTransferOverride('t7', false); // marcação manual prevalece
+    await repo.setTransferOverride('t7', true); // marcação manual prevalece
     await repo.recomputeTransfers();
-    expect((await repo.getTransaction('t7'))?.transfer).toBe(0);
+    expect((await repo.getTransaction('t7'))?.transfer).toBe(1);
   });
 
   test('UX-040: desmarcar a transferência faz o valor voltar às somas na hora', async () => {
@@ -311,6 +311,6 @@ describe('UX v0.4 §7.4 nome da conexão', () => {
   test('migração da versão 1 numera as conexões existentes', async () => {
     const db = createNodeDb();
     await migrate(db);
-    expect((await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version'))?.user_version).toBe(6);
+    expect((await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version'))?.user_version).toBe(10);
   });
 });

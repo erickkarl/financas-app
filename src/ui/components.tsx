@@ -5,7 +5,7 @@ import { Icon, Text, TouchableRipple, useTheme } from 'react-native-paper';
 import { Button, IconButton } from './touch';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { AppTheme } from './theme';
-import { amountA11y, displayDescription, formatSignedAmount, spDateKey, spokenDate } from '../domain/format';
+import { amountA11y, balanceA11y, displayDescription, formatSignedAmount, spDateKey, spokenDate } from '../domain/format';
 import { categoryById } from '../domain/categories';
 import type { TransactionRow } from '../data/repo';
 import type { ConnectionStatusView } from '../domain/connectionStatus';
@@ -163,10 +163,17 @@ export function TransactionItem({ tx, onPress, showConnection = false }: { tx: T
   // UX v0.4: conta com nome repetido mostra o nome da conexão ("Conta corrente · Conexão 1").
   const accountLabel = showConnection && tx.connection_name ? `${tx.account_name} · ${tx.connection_name}` : tx.account_name;
   const future = isFutureTx(tx.date_key);
-  const badges = [future ? 'Futura' : null, tx.manual ? 'Manual' : null, tx.hidden ? 'Oculta' : null, tx.transfer ? 'Transferência' : null].filter(Boolean) as string[];
+  // UX 0.14: selo "Fora do Resumo" (ícone + texto); o valor fica em cor neutra.
+  const out = Boolean(tx.out_of_summary);
+  // UX 0.17 (RF-008.10): estorno de compra no cartão, com selo e valor em cor neutra (não é receita).
+  const refund = Boolean(tx.refund);
+  const badges = [future ? 'Futura' : null, refund ? 'Estorno' : null, tx.manual ? 'Manual' : null, tx.hidden ? 'Oculta' : null, tx.transfer ? 'Transferência' : null, out ? 'Fora do Resumo' : null].filter(Boolean) as string[];
+  const rest = badges.filter((b) => b !== 'Fora do Resumo' && b !== 'Estorno');
   const label = future
     ? `Futura, ${amountA11y(tx.amount).toLowerCase()}, ${tx.description}, categoria ${cat.name}, ${accountLabel}, prevista para ${spokenDate(tx.date_key)} de ${tx.date_key.slice(0, 4)}`
-    : `${amountA11y(tx.amount)}, ${tx.description}, categoria ${cat.name}, ${accountLabel}, ${spokenDate(tx.date_key)}${badges.length ? `, ${badges.join(', ')}` : ''}`;
+    : refund
+      ? `${out ? 'Fora do Resumo, ' : ''}Estorno de ${balanceA11y(tx.amount)}, ${tx.description}, categoria ${cat.name}, ${accountLabel}, ${spokenDate(tx.date_key)}${rest.length ? `, ${rest.join(', ')}` : ''}`
+      : `${out ? 'Fora do Resumo, ' : ''}${out ? amountA11y(tx.amount).toLowerCase() : amountA11y(tx.amount)}, ${tx.description}, categoria ${cat.name}, ${accountLabel}, ${spokenDate(tx.date_key)}${rest.length ? `, ${rest.join(', ')}` : ''}`;
   return (
     <TouchableRipple onPress={onPress} accessibilityRole="button" accessibilityLabel={label} style={styles.txRow}>
       <View style={[styles.txWrap, stacked && { flexDirection: 'column', alignItems: 'flex-start' }]}>
@@ -176,9 +183,9 @@ export function TransactionItem({ tx, onPress, showConnection = false }: { tx: T
             <Icon source={cat.icon} size={catIcon} color={theme.colors.onSurfaceVariant} />
             <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant, marginLeft: 4, flexShrink: 1 }}>{cat.name} · {accountLabel}</Text>
           </View>
-          {badges.length > 0 && <View style={[styles.row, { gap: 4, marginTop: 4 }]}>{badges.map((b) => <Chip key={b} label={b} icon={b === 'Futura' ? 'calendar-clock' : undefined} />)}</View>}
+          {badges.length > 0 && <View style={[styles.row, { gap: 4, marginTop: 4 }]}>{badges.map((b) => <Chip key={b} label={b} icon={b === 'Futura' ? 'calendar-clock' : b === 'Fora do Resumo' ? 'calculator-variant-outline' : b === 'Estorno' ? 'cash-refund' : undefined} />)}</View>}
         </View>
-        <Amount value={tx.amount} neutral={future} />
+        <Amount value={tx.amount} neutral={future || out || refund} />
       </View>
     </TouchableRipple>
   );
@@ -212,20 +219,21 @@ export function FieldError({ text }: { text: string | null }) {
 }
 
 /** Linha inteira tocável com rádio, caixa ou chave (UX-032): o controle pequeno não é um alvo à parte. */
-export function OptionRow({ label, description, kind, checked, onPress }: {
-  label: string; description?: string; kind: 'radio' | 'checkbox' | 'switch'; checked: boolean; onPress: () => void;
+export function OptionRow({ label, description, kind, checked, onPress, disabled = false }: {
+  label: string; description?: string; kind: 'radio' | 'checkbox' | 'switch'; checked: boolean; onPress: () => void; disabled?: boolean;
 }) {
   const theme = useAppTheme();
   const icon = kind === 'radio' ? (checked ? 'radiobox-marked' : 'radiobox-blank') : (checked ? 'checkbox-marked' : 'checkbox-blank-outline');
   return (
     <TouchableRipple
       onPress={onPress}
+      disabled={disabled}
       accessibilityRole={kind}
-      accessibilityState={kind === 'radio' ? { selected: checked } : { checked }}
+      accessibilityState={kind === 'radio' ? { selected: checked, disabled } : { checked, disabled }}
       accessibilityLabel={description ? `${label}. ${description}` : label}
       style={{ minHeight: 56, justifyContent: 'center', paddingHorizontal: 16, paddingVertical: 8 }}
     >
-      <View style={[styles.row, { gap: 12 }]} importantForAccessibility="no-hide-descendants">
+      <View style={[styles.row, { gap: 12, opacity: disabled ? 0.5 : 1 }]} importantForAccessibility="no-hide-descendants">
         <View style={{ flex: 1 }}>
           <Text variant="bodyLarge">{label}</Text>
           {description ? <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>{description}</Text> : null}

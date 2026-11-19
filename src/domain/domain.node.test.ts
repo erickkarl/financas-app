@@ -45,10 +45,11 @@ describe('RNF-004 formatos (UX §3.1, UX-035)', () => {
 });
 
 describe('RF-006.1 categorias (UX v0.3 §7.3, DEV-10)', () => {
-  test('lista tem as 11 categorias + Investimentos; "Sem categoria" é o padrão', () => {
+  test('lista tem as 11 categorias + Rendimentos (UX 0.7) + Investimentos; "Sem categoria" é o padrão', () => {
     expect(CATEGORIES.map((c) => c.name)).toEqual([
       'Moradia e contas', 'Mercado', 'Restaurantes e delivery', 'Transporte', 'Saúde', 'Lazer e viagem',
-      'Compras', 'Assinaturas', 'Impostos e taxas', 'Receitas', 'Outros', 'Investimentos',
+      'Compras', 'Assinaturas', 'Impostos e taxas', 'Receitas', 'Outros',
+      'Rendimentos', 'Investimentos',
     ]);
     expect(categoryById(null).name).toBe('Sem categoria');
   });

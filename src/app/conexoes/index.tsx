@@ -28,6 +28,8 @@ export default function Conexoes() {
   const [notice, setNotice] = useState<string | null>(
     __DEV__ && preview === 'revogada-compartilhada'
       ? revokedMessage('Conexão BANCO AZUL (2)', 2, 'BANCO AZUL')
+      : __DEV__ && preview === 'revogada-patrimonio'
+      ? `${revokedMessage('Conexão Banco Exemplo', 0, null)} O histórico do patrimônio agora não inclui Banco Exemplo.`
       : null,
   );
 

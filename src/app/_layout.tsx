@@ -41,7 +41,10 @@ function Navigator() {
           <Stack.Screen name="conexoes/[id]" options={{ title: 'Conexão' }} />
           <Stack.Screen name="substituir/[id]" options={{ title: 'Autorizar de novo' }} />
           <Stack.Screen name="transacao/[id]" options={{ title: 'Transação' }} />
+          <Stack.Screen name="lancamento" options={{ title: 'Novo lançamento' }} />
+          <Stack.Screen name="patrimonio" options={{ title: 'Patrimônio' }} />
           <Stack.Screen name="privacidade" options={{ title: 'Privacidade e dados' }} />
+          <Stack.Screen name="categorias-lembradas" options={{ title: 'Categorias lembradas' }} />
       </Stack>
       </View>
       )}

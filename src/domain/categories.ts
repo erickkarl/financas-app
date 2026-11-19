@@ -3,7 +3,7 @@
 
 export type CategoryId =
   | 'moradia' | 'mercado' | 'restaurantes' | 'transporte' | 'saude' | 'lazer'
-  | 'compras' | 'assinaturas' | 'impostos' | 'receitas' | 'outros' | 'investimentos';
+  | 'compras' | 'assinaturas' | 'impostos' | 'receitas' | 'outros' | 'rendimentos' | 'investimentos';
 
 export type Category = { id: CategoryId; name: string; icon: string };
 
@@ -20,6 +20,8 @@ export const CATEGORIES: readonly Category[] = [
   { id: 'impostos', name: 'Impostos e taxas', icon: 'receipt' },
   { id: 'receitas', name: 'Receitas', icon: 'cash-multiple' },
   { id: 'outros', name: 'Outros', icon: 'dots-horizontal' },
+  // UX 0.7 §7.3 (RF-008.3): o que o Pluggy identifica como rendimento; conta como receita.
+  { id: 'rendimentos', name: 'Rendimentos', icon: 'piggy-bank-outline' },
   { id: 'investimentos', name: 'Investimentos', icon: 'trending-up' },
 ];
 
@@ -37,7 +39,7 @@ const EXACT: Record<string, CategoryId | null> = {
   '02030001': 'moradia', // financiamento imobiliário
   '02030002': 'transporte', // financiamento de veículos
   // Investimentos: rendimentos e dividendos são receita (UX: "Receitas" inclui rendimentos)
-  '03060000': 'receitas',
+  '03060000': 'rendimentos', // juros e dividendos (UX 0.7, RF-008.3): receita, separada como "Rendimentos"
   // Transferências: mesma titularidade e pagamento de fatura ficam "Sem categoria";
   // são sinais para a regra de transferência (DEV-11), não categoria.
   '04000000': null, '04010000': null, '04020000': null, '04030000': null,
@@ -99,4 +101,18 @@ export function mapPluggyCategory(pluggyCategoryId: string | null | undefined): 
 export function isPluggyTransferSignal(pluggyCategoryId: string | null | undefined): boolean {
   if (!pluggyCategoryId) return false;
   return pluggyCategoryId.startsWith('04') || pluggyCategoryId === '05100000';
+}
+
+/**
+ * requisitos v1.21 (11.16, mapa ajustado pelo PM): no cartão, a categoria do comerciante (payeeMCC) sugere a categoria
+ * só onde o código tem significado claro, conferido no Visa Merchant Data Standards Manual (outubro de 2026):
+ * 5968 "Direct Marketing – Continuity/Subscription Merchant" (p. 79) → "Assinaturas";
+ * 5499 "Miscellaneous Food Stores – Convenience Stores and Specialty Markets" (p. 64) → "Mercado".
+ * Só substitui "Outros" ou "Sem categoria": não muda uma categoria mais específica que o Pluggy já deu.
+ */
+const MCC_CATEGORY: Record<string, CategoryId> = { '5968': 'assinaturas', '5499': 'mercado' };
+export function categoryFromMcc(current: CategoryId | null, accountType: string | null | undefined, mcc: string | number | null | undefined): CategoryId | null {
+  if (accountType !== 'CREDIT' || mcc == null) return current;
+  const byMcc = MCC_CATEGORY[String(mcc).trim()];
+  return byMcc && (current === null || current === 'outros') ? byMcc : current;
 }

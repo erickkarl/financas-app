@@ -20,7 +20,13 @@ import { Banner, NoCredentialsHelp, SectionTitle, Screen, useAppTheme } from '..
 const STORED = [
   'Seus códigos do Pluggy (Client ID e Client Secret), em armazenamento protegido do aparelho.',
   'Contas, saldos, cartões e transações trazidos das suas conexões.',
-  'As categorias que você mudou, as transações que ocultou e as transferências que marcou.',
+  'As categorias que você mudou, as transações que ocultou e as que marcou como transferência ou como fora do Resumo.',
+  // UX 0.14 / RNF-007
+  'O número do CPF ou do CNPJ de quem pagou e de quem recebeu cada transação, quando o banco informa. O app usa isso para reconhecer transferências entre as suas contas.',
+  // UX 0.7 (RF-016)
+  'O valor dos seus investimentos por instituição e o histórico diário do seu patrimônio.',
+  // UX 0.17 (RF-006.3, RNF-007).
+  'As categorias que o app lembra por destinatário: o número do CPF ou do CNPJ e a categoria que você escolheu.',
   'Os identificadores das conexões que este app criou no Pluggy.',
   'Os nomes que você deu às conexões.',
   'Suas preferências, como a etapa do guia do Pluggy.',
@@ -137,6 +143,8 @@ export default function Privacidade() {
           <>
             <SectionTitle>O que este app guarda</SectionTitle>
             {STORED.map((s) => <Text key={s} variant="bodyMedium">{`• ${s}`}</Text>)}
+            {/* UX 0.17 (RF-006.3): link para T-22. */}
+            <Button compact style={{ alignSelf: 'flex-start' }} onPress={() => router.push('/categorias-lembradas')}>Ver categorias lembradas</Button>
             <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant, marginTop: 8 }}>Política de privacidade (em preparação)</Text>
             <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant }}>Termos de uso (em preparação)</Text>
             <Button mode="outlined" textColor={theme.colors.error} onPress={() => setStep('explain')} style={{ marginTop: 24 }}>
@@ -154,7 +162,7 @@ export default function Privacidade() {
               'Os dados importados e os lançamentos guardados neste aparelho.',
               'As credenciais do Pluggy guardadas neste aparelho.',
               ...(n > 0 ? ['As conexões que este app criou no Pluggy.'] : []),
-              'Os nomes das conexões e as preferências.',
+              'Os nomes das conexões, as categorias lembradas e as preferências.',
             ].map((t) => <Text key={t} variant="bodyMedium">{`• ${t}`}</Text>)}
             <SectionTitle>O que não é apagado</SectionTitle>
             <Text variant="bodyMedium">Suas contas no Pluggy e no Meu Pluggy não são apagadas, nem os consentimentos que você deu no Meu Pluggy. Para encerrá-los, entre no Meu Pluggy.</Text>

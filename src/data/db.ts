@@ -12,7 +12,7 @@ export interface Db {
 }
 
 export const DB_NAME = 'financas.db';
-const DB_VERSION = 6;
+const DB_VERSION = 10;
 
 const MIGRATION_1 = `
 CREATE TABLE IF NOT EXISTS connections (
@@ -115,6 +115,71 @@ export async function migrate(db: Db): Promise<void> {
       ALTER TABLE accounts ADD COLUMN unauthorized_at TEXT;
     `);
   }
+  if (current < 7) {
+    // Ciclo 2: investimentos por conexão (RF-008.3 aviso R-5, RF-016 patrimônio) e "Rendimentos" (UX 0.7 §7.3).
+    await db.execAsync(`
+      CREATE TABLE IF NOT EXISTS investments (
+        id TEXT PRIMARY KEY NOT NULL,
+        item_id TEXT NOT NULL,
+        type TEXT,
+        subtype TEXT,
+        name TEXT,
+        balance REAL NOT NULL DEFAULT 0,
+        updated_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_investments_item ON investments(item_id);
+      -- RF-016.4: no máximo um ponto por dia e por conexão ('manual' = conta "Dinheiro"). Ponto de dia passado não é
+      -- reescrito; sai ao revogar a conexão ou apagar os dados (RF-016.7).
+      CREATE TABLE IF NOT EXISTS wealth_points (
+        date_key TEXT NOT NULL,
+        item_id TEXT NOT NULL,
+        accounts REAL NOT NULL,
+        investments REAL NOT NULL,
+        data_at TEXT,
+        PRIMARY KEY (date_key, item_id)
+      );
+      ALTER TABLE accounts ADD COLUMN auto_invested REAL;
+      ALTER TABLE connections ADD COLUMN investments_count INTEGER;
+      UPDATE transactions SET auto_category = 'rendimentos' WHERE pluggy_category_id = '03060000';
+    `);
+  }
+  if (current < 8) {
+    // UX 0.14 / requisitos v1.18: marca "Fora do Resumo" (RF-008.8), tipo da operação (R-8.5) e documento de pagador e
+    // recebedor (R-8.2, RNF-007: só tipo e número, só no aparelho; saem com a transação).
+    await db.execAsync(`
+      ALTER TABLE transactions ADD COLUMN out_of_summary INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE transactions ADD COLUMN operation_type TEXT;
+      ALTER TABLE transactions ADD COLUMN payer_doc_type TEXT;
+      ALTER TABLE transactions ADD COLUMN payer_doc TEXT;
+      ALTER TABLE transactions ADD COLUMN receiver_doc_type TEXT;
+      ALTER TABLE transactions ADD COLUMN receiver_doc TEXT;
+    `);
+  }
+  if (current < 9) {
+    // R-2.1 (requisitos v1.20): pagamento de fatura sem par (não reconhecido por R-8.2 nem marcado à mão).
+    await db.execAsync('ALTER TABLE transactions ADD COLUMN bill_unpaired INTEGER NOT NULL DEFAULT 0;');
+  }
+  if (current < 10) {
+    // requisitos v1.21–v1.23 / UX 0.17.
+    // RF-008.10: estorno de compra no cartão (reduz a despesa da categoria; nunca receita).
+    // RF-006.3: categoria lembrada por destinatário. A lembrança guarda SÓ o tipo e o número do documento, a categoria,
+    // a contagem e a data do último lançamento (v1.23, seção 11.17): nunca descrição nem nome (RNF-007).
+    // remembered_category = categoria que a lembrança deu à transação (a escolha da pessoa, user_category, prevalece).
+    await db.execAsync(`
+      ALTER TABLE transactions ADD COLUMN refund INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE transactions ADD COLUMN remembered_category TEXT;
+      CREATE TABLE IF NOT EXISTS recipient_categories (
+        doc_type TEXT NOT NULL,
+        doc TEXT NOT NULL,
+        category TEXT NOT NULL,
+        tx_count INTEGER NOT NULL DEFAULT 0,
+        last_tx_date TEXT,
+        created_at TEXT NOT NULL,
+        used_at TEXT NOT NULL,
+        PRIMARY KEY (doc_type, doc)
+      );
+    `);
+  }
   await db.execAsync(`PRAGMA user_version = ${DB_VERSION}`);
 }
 
@@ -124,6 +189,9 @@ export async function wipeAll(db: Db): Promise<void> {
     await db.runAsync('DELETE FROM transactions');
     await db.runAsync('DELETE FROM accounts');
     await db.runAsync('DELETE FROM connections');
+    await db.runAsync('DELETE FROM investments');
+    await db.runAsync('DELETE FROM wealth_points');
+    await db.runAsync('DELETE FROM recipient_categories');
     await db.runAsync('DELETE FROM app_state');
   });
 }
