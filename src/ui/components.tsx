@@ -3,7 +3,7 @@ import React, { useEffect, useRef } from 'react';
 import { AccessibilityInfo, Animated, Linking, Platform, ScrollView, StyleSheet, TextInput, useWindowDimensions, View, type ScrollViewProps, type ViewStyle } from 'react-native';
 import { Icon, Text, TouchableRipple, useTheme } from 'react-native-paper';
 import { Button, IconButton } from './touch';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { AppTheme } from './theme';
 import { amountA11y, balanceA11y, displayDescription, formatSignedAmount, spDateKey, spokenDate } from '../domain/format';
 import { categoryById } from '../domain/categories';
@@ -82,8 +82,8 @@ export function Banner({ icon = 'alert-outline', text, actionLabel, onAction, to
       </View>
       {(actionLabel || secondaryLabel) && (
         <View style={styles.bannerActions}>
-          {secondaryLabel && onSecondary && <Button compact onPress={onSecondary} textColor={fg}>{secondaryLabel}</Button>}
-          {actionLabel && onAction && <Button compact onPress={onAction} textColor={fg}>{actionLabel}</Button>}
+          {secondaryLabel && onSecondary && <Button compact align="right" onPress={onSecondary} textColor={fg}>{secondaryLabel}</Button>}
+          {actionLabel && onAction && <Button compact align="right" onPress={onAction} textColor={fg}>{actionLabel}</Button>}
         </View>
       )}
     </View>
@@ -323,3 +323,41 @@ export const styles = StyleSheet.create({
   txMain: { flexShrink: 1, flexGrow: 1, flexBasis: 180 },
   section: { marginTop: 16, marginBottom: 4 },
 });
+
+/**
+ * C3-07 (revisão do ciclo 3): o título nativo da barra superior das telas em pilha não acompanha a fonte do sistema,
+ * enquanto o das abas acompanha. Este título é texto do app, cresce com a fonte e quebra em até 2 linhas.
+ */
+export function HeaderTitle({ children }: { children: string }) {
+  // C3-09 / REV-19: o título começa na coluna de conteúdo (máx. 640 dp centralizada, com 16 dp de margem), também
+  // deitado. Mede onde a barra o colocou e completa a diferença com margem (nunca negativa).
+  const { width } = useWindowDimensions();
+  const ref = useRef<{ measureInWindow: (cb: (x: number, y: number, w: number, h: number) => void) => void } | null>(null);
+  const [margin, setMargin] = React.useState(0);
+  // Coluna das telas, que respeitam a área segura dos lados (Screen): margem esquerda + metade da sobra + 16 dp.
+  const insets = useSafeAreaInsets();
+  const target = insets.left + Math.max(0, (width - insets.left - insets.right - 640) / 2) + 16;
+  const measure = () => ref.current?.measureInWindow((x: number) => {
+    const base = x - margin;
+    const next = Math.max(0, Math.round(target - base));
+    if (Math.abs(next - margin) > 1) setMargin(next);
+  });
+  // C3-09 (Ajustes deitado): ao girar, o título pode não mudar de tamanho e o onLayout não volta; mede de novo quando
+  // a largura ou a área segura mudam (e depois de a barra se acomodar).
+  // Só depois de montado: medir durante a montagem da barra quebrava a montagem nativa ("View already has a parent").
+  const dims = useRef(`${width}|${insets.left}|${insets.right}`);
+  useEffect(() => {
+    const key = `${width}|${insets.left}|${insets.right}`;
+    if (key === dims.current) return;
+    dims.current = key;
+    const t = setTimeout(measure, 400);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [width, insets.left, insets.right]);
+  return (
+    // C3-16: título em duas linhas com respiro em cima e embaixo, sem encostar na borda da barra.
+    <View ref={ref as never} onLayout={measure} style={{ marginLeft: margin, flexShrink: 1, paddingVertical: 6 }}>
+      <Text variant="titleLarge" numberOfLines={2} accessibilityRole="header">{children}</Text>
+    </View>
+  );
+}

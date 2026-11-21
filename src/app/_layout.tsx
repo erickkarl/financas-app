@@ -1,6 +1,7 @@
 import React from 'react';
 import { StyleSheet, useColorScheme, View } from 'react-native';
 import { Stack } from 'expo-router';
+import * as Linking from 'expo-linking';
 import { StatusBar } from 'expo-status-bar';
 import { SQLiteProvider, useSQLiteContext } from 'expo-sqlite';
 import { PaperProvider, Text } from 'react-native-paper';
@@ -10,6 +11,8 @@ import { AppProvider, useApp } from '../state/AppContext';
 import { darkTheme, lightTheme } from '../ui/theme';
 import { APP_NAME } from '../ui/constants';
 import { UnlockScreen } from '../ui/UnlockScreen';
+import { HeaderTitle } from '../ui/components';
+import { setForceLoading } from '../ui/touch';
 
 
 function Navigator() {
@@ -29,6 +32,7 @@ function Navigator() {
           headerStyle: { backgroundColor: theme.colors.surface },
           headerTintColor: theme.colors.onSurface,
           contentStyle: { backgroundColor: theme.colors.background },
+          headerTitle: ({ children }) => <HeaderTitle>{children}</HeaderTitle>,
           headerBackButtonDisplayMode: 'minimal',
         }}
       >
@@ -75,6 +79,15 @@ function Providers() {
       </PaperProvider>
     </AppProvider>
   );
+}
+
+// Evidência (só em desenvolvimento): um link com ?carregando=1 força o estado carregando dos botões da tela aberta.
+// Ouvinte de módulo, sem estado: ler o parâmetro com um hook no layout raiz renderizava a árvore toda a cada navegação e
+// quebrava a montagem nativa do Resumo ("View already has a parent").
+if (__DEV__) {
+  const apply = (url: string | null) => setForceLoading(Boolean(url && /[?&]carregando=1\b/.test(url)));
+  Linking.getInitialURL().then(apply).catch(() => undefined);
+  Linking.addEventListener('url', ({ url }) => apply(url));
 }
 
 export default function RootLayout() {

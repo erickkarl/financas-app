@@ -5,6 +5,8 @@ import type { Db, SqlValue } from './db';
 import { normalizeSearch, spDateKey } from '../domain/format';
 import { detectTransfers } from '../domain/transfers';
 import { isBillPayment, ownTransferSignal } from '../domain/recognition';
+import { monthsBetween } from '../domain/monthly';
+import { buildSaldoHistory, type SaldoConn, type SaldoHistory, type SaldoPoint } from '../domain/saldoHistory';
 import { isCardRefund, RECIPIENT_DOC_SQL, RECIPIENT_TYPE_SQL, recipientKey, type RecipientKey } from '../domain/recipient';
 
 export type ConnectionRow = {
@@ -318,6 +320,57 @@ export function createRepo(db: Db) {
       );
       const manual = man?.s ?? 0;
       return { total: Math.round(((bank?.s ?? 0) + manual) * 100) / 100, manual, hasManual: (man?.n ?? 0) > 0 };
+    },
+
+    // ---------- RF-017 / T-23: visão por mês ----------
+    /**
+     * Uma linha por mês, da primeira transação até o mês atual. Gasto, Receita e Economia de cada mês são exatamente
+     * "Despesas", "Receitas" e "Resultado" de T-18 (RF-017.5): vêm da mesma função monthSummary.
+     */
+    async monthlyOverview(today: string): Promise<{ firstDate: string | null; rows: { month: string; receitas: number; despesas: number; resultado: number }[] }> {
+      const t0 = today.replace(/[^0-9-]/g, '');
+      const first = (await db.getFirstAsync<{ d: string | null }>(`SELECT MIN(date_key) AS d FROM transactions WHERE date_key <= '${t0}'`))?.d ?? null;
+      if (!first) return { firstDate: null, rows: [] };
+      const rows = [];
+      for (const m of monthsBetween(first.slice(0, 7), t0.slice(0, 7))) {
+        const s = await this.monthSummary(m, t0);
+        rows.push({ month: m, receitas: s.receitas, despesas: s.despesas, resultado: s.resultado });
+      }
+      return { firstDate: first, rows };
+    },
+    /** RF-017.7/.8/.8.1/.12 (ux.md 0.20): dados de "Saldo em contas" por mês, reais e estimados. */
+    async saldoHistory(today: string): Promise<SaldoHistory> {
+      const conns = await db.getAllAsync<{ item_id: string; name: string }>(
+        `SELECT c.item_id, ${CONN_NAME('c')} AS name FROM connections c
+         WHERE c.duplicate_of IS NULL
+           -- Como no Início (R-18): a conexão que aguarda nova autorização continua somando.
+           AND EXISTS (SELECT 1 FROM accounts a WHERE a.item_id = c.item_id AND a.type = 'BANK' AND a.unauthorized_at IS NULL)
+         ORDER BY c.created_at`);
+      const out: SaldoConn[] = [];
+      for (const c of conns) {
+        const bal = await db.getFirstAsync<{ s: number | null; auto: number }>(
+          `SELECT SUM(balance) AS s, SUM(CASE WHEN auto_invested IS NOT NULL THEN 1 ELSE 0 END) AS auto
+           FROM accounts WHERE item_id = ? AND type = 'BANK' AND unauthorized_at IS NULL`, [c.item_id]);
+        const txs = await db.getAllAsync<{ date: string; date_key: string; amount: number; y: number }>(
+          `SELECT t.date, t.date_key, t.amount, CASE WHEN t.pluggy_category_id = '03060000' THEN 1 ELSE 0 END AS y
+           FROM transactions t JOIN accounts a ON a.id = t.account_id
+           WHERE a.item_id = ? AND a.type = 'BANK' AND a.unauthorized_at IS NULL AND t.manual = 0`, [c.item_id]);
+        const pts = await db.getAllAsync<{ date_key: string; accounts: number; data_at: string | null }>(
+          'SELECT date_key, accounts, data_at FROM wealth_points WHERE item_id = ? ORDER BY date_key', [c.item_id]);
+        // Um saldo por hora de dado: dias seguidos sem dado novo repetem o mesmo ponto e não contam duas vezes.
+        const seen = new Set<string>(); const points: SaldoPoint[] = [];
+        for (const p of pts) {
+          const at = p.data_at ?? `${p.date_key}T15:00:00Z`;
+          if (seen.has(at)) continue; seen.add(at); points.push({ dataAt: at, balance: p.accounts });
+        }
+        out.push({
+          id: c.item_id, name: c.name, currentBalance: Math.round((bal?.s ?? 0) * 100) / 100,
+          yieldOnlyInBalance: (bal?.auto ?? 0) > 0 && !txs.some((t) => t.y === 1),
+          points, txs: txs.map((t) => ({ date: t.date, dateKey: t.date_key, amount: t.amount, isYield: t.y === 1 })),
+        });
+      }
+      const manual = await db.getAllAsync<{ date_key: string; amount: number }>('SELECT date_key, amount FROM transactions WHERE manual = 1');
+      return buildSaldoHistory(out, manual.map((m) => ({ dateKey: m.date_key, amount: m.amount })), today);
     },
 
     // ---------- Patrimônio (RF-016, T-21) ----------

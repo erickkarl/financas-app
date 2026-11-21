@@ -1,10 +1,11 @@
 // T-04 Início — RF-004, RF-003.2, RF-003.3, RF-003.4, RF-001.1
+import { SafeAreaView } from 'react-native-safe-area-context';
 import React, { useCallback, useEffect, useLayoutEffect, useState } from 'react';
 import { Linking, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { router, useFocusEffect, useLocalSearchParams, useNavigation } from 'expo-router';
 import { openExtrato } from '../../state/nav';
 import { ActivityIndicator, Card, Dialog, Divider, Icon, List, Portal, Snackbar, Text, TouchableRipple } from 'react-native-paper';
-import { Button, IconButton } from '../../ui/touch';
+import { Button, IconButton, DialogActions, AppDialog, ListItem } from '../../ui/touch';
 import { useApp } from '../../state/AppContext';
 import { useLoad, useStartConnect } from '../../state/hooks';
 import { connectionStatusView } from '../../domain/connectionStatus';
@@ -17,17 +18,25 @@ type Group = { conn: ConnectionRow; accounts: AccountRow[] };
 
 export default function Inicio() {
   // Captura de evidência com dados reais: financasapp://?mascarar=1 (só em desenvolvimento).
-  const { mascarar, validade } = useLocalSearchParams<{ mascarar?: string; validade?: string }>();
+  const { mascarar, validade, dialogo, credenciais, falha } = useLocalSearchParams<{ falha?: string; mascarar?: string; validade?: string; dialogo?: string; credenciais?: string }>();
   if (__DEV__ && mascarar === '1' && !isMaskingValues()) setMaskValues(true);
   if (__DEV__ && validade) setPreviewValidity(validade);
   const theme = useAppTheme();
   const navigation = useNavigation();
-  const { repo, refreshing, refreshAll, online, credStatus, locked, ready, screenLock } = useApp();
+  const { repo, refreshing, refreshAll, online, credStatus: realCredStatus, locked, ready, screenLock } = useApp();
+  // Evidência (só em desenvolvimento): ?credenciais=none mostra a faixa "Configurar" sem remover as credenciais.
+  const credStatus = __DEV__ && credenciais === 'none' ? 'none' : realCredStatus;
   const startConnect = useStartConnect();
   const [snack, setSnack] = useState<string | null>(null);
   const [explain, setExplain] = useState(false);
   // R-17 (UX 0.11): apagar uma conta "Sem autorização".
   const [deleteAccount, setDeleteAccount] = useState<{ id: string; name: string } | null>(null);
+  // Evidência (só em desenvolvimento): ?dialogo=apagar-conta abre o diálogo de uma conta "Sem autorização" com o nome
+  // de uma conta real. A captura fecha com Voltar, sem tocar em nenhuma ação.
+  useEffect(() => {
+    if (!__DEV__ || dialogo !== 'apagar-conta') return;
+    repo.listAccounts().then((as) => { const a = as.find((x) => x.type === 'BANK'); if (a) setDeleteAccount({ id: a.id, name: a.name }); });
+  }, [dialogo, repo]);
   const [slowFirstLoad, setSlowFirstLoad] = useState(false);
   const smallIcon = useIconSize(14);
 
@@ -43,12 +52,12 @@ export default function Inicio() {
   useEffect(() => {
     if (locked || !ready) return;
     (async () => {
-      if (credStatus === 'none' && !(await repo.getState('first_guide_shown'))) {
+      if (realCredStatus === 'none' && !(await repo.getState('first_guide_shown'))) {
         await repo.setState('first_guide_shown', '1');
         router.push({ pathname: '/guia', params: { primeira: '1' } });
       }
     })();
-  }, [locked, ready, credStatus, repo]);
+  }, [locked, ready, realCredStatus, repo]);
 
   const onRefresh = useCallback(async () => {
     // UX-046: sem credenciais, "Atualizar" mostra o aviso em vez de tentar.
@@ -134,8 +143,9 @@ export default function Inicio() {
   const cards = views.flatMap((v) => v.accounts.filter((a) => a.type === 'CREDIT').map((a) => ({ a, conn: v.conn })));
   const unauthorizedCount = bank.filter(({ a }) => a.unauthorized_at).length;
 
+  // C3-09: a coluna respeita a área segura dos lados, como nas outras telas (e o título da barra).
   return (
-    <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
+        <SafeAreaView edges={['left', 'right']} style={{ flex: 1, backgroundColor: theme.colors.background }}>
       <ScrollView
         contentContainerStyle={ui.scroll}
         refreshControl={<RefreshControl refreshing={false} onRefresh={onRefresh} />}
@@ -157,7 +167,8 @@ export default function Inicio() {
           <TouchableRipple onPress={() => setExplain(true)} accessibilityRole="button" accessibilityHint="Explica de quando são os dados" style={s.statusLine}>
             <View style={ui.row} accessibilityLiveRegion="polite">
               {refreshing ? <ActivityIndicator size={14} /> : <Icon source="clock-outline" size={smallIcon} color={theme.colors.onSurfaceVariant} />}
-              <Text variant="bodySmall" style={{ marginLeft: 6, color: theme.colors.onSurfaceVariant }}>
+              {/* Com fonte grande, a linha quebra em vez de sair da tela (achado na revisão do ciclo 3). */}
+              <Text variant="bodySmall" style={{ marginLeft: 6, flexShrink: 1, color: theme.colors.onSurfaceVariant }}>
                 {refreshing ? 'Atualizando…' : rangeLine ?? 'Ainda sem dados do banco'}
               </Text>
             </View>
@@ -232,12 +243,11 @@ export default function Inicio() {
             if (!bankAccounts.length && !view.stale && !view.needsAttention) return null;
             const name = conn.name;
             const accountNames = accounts.filter((a) => a.id !== conn.suggested_account_id).map((a) => a.name).join(', ');
-            const failedRefresh = Boolean(conn.last_sync_error);
+            // Evidência (só em desenvolvimento): ?falha=1 mostra a faixa "Tentar de novo" sem forçar falha real.
+            const failedRefresh = Boolean(conn.last_sync_error) || (__DEV__ && falha === '1');
             return (
               <View key={conn.item_id} style={s.group}>
-                <List.Item
-                  titleNumberOfLines={3}
-                  descriptionNumberOfLines={3}
+                <ListItem
                   title={name}
                   titleStyle={{ fontWeight: '600' }}
                   description={[accountNames, view.needsAttention ? 'Esta conexão precisa da sua atenção.' : null].filter(Boolean).join('\n') || undefined}
@@ -270,9 +280,7 @@ export default function Inicio() {
                 )}
                 {bankAccounts.map((a) => a.unauthorized_at ? (
                   <View key={a.id}>
-                    <List.Item
-                      titleNumberOfLines={3}
-                      descriptionNumberOfLines={3}
+                    <ListItem
                       title={a.name === name ? accountTypeLabel(a.subtype) : a.name}
                       description={`Sem autorização · dados de ${formatWhen(new Date(a.unauthorized_at))}\nNão entra no saldo`}
                       left={(p) => <List.Icon {...p} icon="link-off" />}
@@ -284,9 +292,7 @@ export default function Inicio() {
                     <Button compact textColor={theme.colors.error} onPress={() => setDeleteAccount({ id: a.id, name: a.name })} style={s.inlineAction}>Apagar esta conta</Button>
                   </View>
                 ) : (
-                  <List.Item
-                    titleNumberOfLines={3}
-                    descriptionNumberOfLines={3}
+                  <ListItem
                     key={a.id}
                     title={a.name === name ? accountTypeLabel(a.subtype) : a.name}
                     description={[a.number ? `final ${isMaskingValues() ? '••••' : a.number.slice(-4)}` : null, autoInvestLine(a)].filter(Boolean).join('\n') || undefined}
@@ -306,8 +312,7 @@ export default function Inicio() {
           {hasInvestments && wealth.byConnection.map((c) => (
             <View key={c.item_id}>
               {c.investments > 0 && (
-                <List.Item
-                  titleNumberOfLines={3}
+                <ListItem
                   title={c.name}
                   description="Investimentos"
                   right={() => <Text variant="titleMedium" style={[ui.tabular, s.value]}>{formatBalance(c.investments)}</Text>}
@@ -325,9 +330,7 @@ export default function Inicio() {
 
           {cards.length > 0 && <SectionTitle>Cartões de crédito</SectionTitle>}
           {cards.map(({ a }) => (
-            <List.Item
-              titleNumberOfLines={3}
-              descriptionNumberOfLines={3}
+            <ListItem
               key={a.id}
               title={a.name}
               description={`Fatura atual${a.due_date ? ` · vence em ${formatDate(new Date(a.due_date))}` : ''}`}
@@ -341,9 +344,7 @@ export default function Inicio() {
           {totals.hasManual && (
             <>
               <SectionTitle>Dinheiro</SectionTitle>
-              <List.Item
-                titleNumberOfLines={3}
-                descriptionNumberOfLines={3}
+              <ListItem
                 title="Dinheiro"
                 right={() => <Text variant="titleMedium" style={[ui.tabular, s.value]}>{formatBalance(totals.manual)}</Text>}
                 onPress={() => openExtrato({ account: 'manual' })}
@@ -358,32 +359,32 @@ export default function Inicio() {
       </ScrollView>
 
       <Portal>
-        <Dialog visible={deleteAccount !== null} onDismiss={() => setDeleteAccount(null)}>
+        <AppDialog visible={deleteAccount !== null} onDismiss={() => setDeleteAccount(null)}>
           <Dialog.Title>{`Apagar ${deleteAccount?.name ?? 'esta conta'}?`}</Dialog.Title>
           <Dialog.Content>
             <Text variant="bodyMedium">As transações dela e as categorias que você mudou são apagadas deste aparelho.</Text>
           </Dialog.Content>
-          <Dialog.Actions>
+          <DialogActions>
             <Button onPress={() => setDeleteAccount(null)}>Cancelar</Button>
             <Button textColor={theme.colors.error} onPress={async () => {
               if (deleteAccount) await repo.deleteAccountLocal(deleteAccount.id);
               setDeleteAccount(null);
               reload();
             }}>Apagar</Button>
-          </Dialog.Actions>
-        </Dialog>
-        <Dialog visible={explain} onDismiss={() => setExplain(false)}>
+          </DialogActions>
+        </AppDialog>
+        <AppDialog visible={explain} onDismiss={() => setExplain(false)}>
           <Dialog.Title>De quando são os dados</Dialog.Title>
           <Dialog.Content>
             <Text variant="bodyMedium">Os dados dos seus bancos chegam ao Pluggy a cada 24 horas. O app busca o que já chegou sempre que você abre ou toca em Atualizar.</Text>
           </Dialog.Content>
-          <Dialog.Actions>
+          <DialogActions>
             <Button onPress={() => setExplain(false)}>Fechar</Button>
-          </Dialog.Actions>
-        </Dialog>
+          </DialogActions>
+        </AppDialog>
       </Portal>
       <Snackbar visible={Boolean(snack)} onDismiss={() => setSnack(null)} duration={5000}>{snack}</Snackbar>
-    </View>
+    </SafeAreaView>
   );
 }
 

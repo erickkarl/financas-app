@@ -1,8 +1,9 @@
 // T-07 Credenciais do Pluggy (gerenciar) — RF-000.4. Client Secret nunca aparece; Client ID só os 4 últimos.
+import { isMaskingValues } from '../../domain/format';
 import React, { useEffect, useState } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Dialog, Portal, Snackbar, Text } from 'react-native-paper';
-import { Button } from '../../ui/touch';
+import { Button, DialogActions, AppDialog } from '../../ui/touch';
 import { useApp } from '../../state/AppContext';
 import { takeFlash } from '../../state/flash';
 import { useLoad } from '../../state/hooks';
@@ -52,7 +53,7 @@ export default function Credenciais() {
             ) : (
               <Text variant="titleMedium">Credenciais configuradas</Text>
             )}
-            <Text variant="bodyLarge" accessibilityLabel={`Client ID termina em ${meta.clientIdTail?.split('').join(' ')}`}>{`Client ID: termina em ${meta.clientIdTail}`}</Text>
+            <Text variant="bodyLarge" accessibilityLabel={`Client ID termina em ${meta.clientIdTail?.split('').join(' ')}`}>{`Client ID: termina em ${__DEV__ && isMaskingValues() ? '••••' : meta.clientIdTail}`}</Text>
             {meta.verifiedAt && <Text variant="bodyMedium">{credStatus === 'rejected' ? `Funcionaram pela última vez em ${formatDateTime(new Date(meta.verifiedAt))}` : `Verificadas em ${formatDateTime(new Date(meta.verifiedAt))}`}</Text>}
             <Button mode="contained" onPress={() => router.push('/credenciais/informar')} contentStyle={{ minHeight: 48 }}>Trocar credenciais</Button>
             <Button onPress={() => setConfirmRemove(true)} contentStyle={{ minHeight: 48 }}>Remover credenciais</Button>
@@ -60,17 +61,17 @@ export default function Credenciais() {
         )}
       </Screen>
       <Portal>
-        <Dialog visible={confirmRemove} onDismiss={() => setConfirmRemove(false)}>
+        <AppDialog visible={confirmRemove} onDismiss={() => setConfirmRemove(false)}>
           <Dialog.Title>Remover credenciais?</Dialog.Title>
           <Dialog.Content>
             {/* R-1 [P]: os dados importados ficam; o app só para de atualizar. */}
             <Text variant="bodyMedium">O app para de atualizar suas contas. Seus dados já importados continuam neste aparelho. Para revogar uma conexão ou excluir sua conta, você vai precisar configurar as credenciais de novo.</Text>
           </Dialog.Content>
-          <Dialog.Actions>
+          <DialogActions>
             <Button onPress={() => setConfirmRemove(false)}>Cancelar</Button>
             <Button onPress={remove}>Remover</Button>
-          </Dialog.Actions>
-        </Dialog>
+          </DialogActions>
+        </AppDialog>
       </Portal>
       <Snackbar visible={!!snack} onDismiss={() => setSnack(null)}>{snack}</Snackbar>
     </>

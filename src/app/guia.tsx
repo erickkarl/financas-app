@@ -4,7 +4,7 @@ import { Linking, ScrollView, StyleSheet, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { Icon, List, Modal, Portal, Text } from 'react-native-paper';
-import { Button } from '../ui/touch';
+import { Button, ListAccordion, ListItem } from '../ui/touch';
 import { useApp } from '../state/AppContext';
 import { announce, Banner, Screen, useAppTheme } from '../ui/components';
 import { takeFlash } from '../state/flash';
@@ -101,7 +101,7 @@ export default function Guia() {
             ['2', 'Criar sua aplicação no painel do Pluggy', opened['2']],
             ['3', 'Colar seus códigos aqui', false],
           ].map(([n, label, done]) => (
-            <List.Item
+            <ListItem
               key={n as string}
               title={label as string}
               description={done ? 'Feita' : 'A fazer'}
@@ -163,9 +163,9 @@ export default function Guia() {
               )}
             </View>
           ))}
-          <List.Accordion title="Estou fazendo isso no computador" expanded={pcTip} onPress={() => setPcTip(!pcTip)}>
+          <ListAccordion title="Estou fazendo isso no computador" expanded={pcTip} onPress={() => setPcTip(!pcTip)}>
             <Text variant="bodyMedium" style={{ paddingHorizontal: 16 }}>Você vai precisar trazer os dois códigos para o celular. Use um gerenciador de senhas ou abra o painel do Pluggy no navegador do celular para copiar e colar.</Text>
-          </List.Accordion>
+          </ListAccordion>
           {failBox}
           {opened['2'] ? (
             <>
@@ -185,9 +185,9 @@ export default function Guia() {
           <Text variant="titleLarge" accessibilityRole="header">Ajuda</Text>
           <ScrollView style={{ maxHeight: 460 }}>
             {HELP.map(([q, a]) => (
-              <List.Accordion key={q} title={q} titleNumberOfLines={3} expanded={openQ === q} onPress={() => setOpenQ(openQ === q ? null : q)}>
+              <ListAccordion key={q} title={q} expanded={openQ === q} onPress={() => setOpenQ(openQ === q ? null : q)}>
                 <Text variant="bodyMedium" style={{ paddingHorizontal: 16, paddingBottom: 12 }}>{a}</Text>
-              </List.Accordion>
+              </ListAccordion>
             ))}
           </ScrollView>
           <Button onPress={() => setHelp(false)} style={{ alignSelf: 'flex-end' }}>Fechar</Button>

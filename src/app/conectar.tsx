@@ -4,7 +4,7 @@ import { Linking, StyleSheet, useColorScheme, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { PluggyConnect } from 'react-native-pluggy-connect';
 import { ActivityIndicator, HelperText, Icon, List, Text, TextInput } from 'react-native-paper';
-import { Button } from '../ui/touch';
+import { Button, ListAccordion } from '../ui/touch';
 import { useApp } from '../state/AppContext';
 import { takeFlash } from '../state/flash';
 import { useLoad } from '../state/hooks';
@@ -321,9 +321,9 @@ export default function Conectar() {
               <Text variant="bodyMedium" style={{ flex: 1 }}>{BANNER_NOTE}</Text>
             </View>
           ) : (
-            <List.Accordion title="Sobre a faixa que aparece na janela do Pluggy" titleNumberOfLines={2} expanded={noteOpen} onPress={() => setNoteOpen(!noteOpen)} style={{ paddingHorizontal: 0 }}>
+            <ListAccordion title="Sobre a faixa que aparece na janela do Pluggy" expanded={noteOpen} onPress={() => setNoteOpen(!noteOpen)} style={{ paddingHorizontal: 0 }}>
               <Text variant="bodyMedium" style={{ paddingBottom: 8 }}>{BANNER_NOTE}</Text>
-            </List.Accordion>
+            </ListAccordion>
           )}
           {limit === 'full' && awaiting ? (
             <>

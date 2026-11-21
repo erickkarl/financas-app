@@ -3,7 +3,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 import { router, useLocalSearchParams, useNavigation, usePreventRemove } from 'expo-router';
 import { HelperText, List, Modal, Portal, SegmentedButtons, Text, TextInput, Dialog } from 'react-native-paper';
-import { Button } from '../ui/touch';
+import { Button, DialogActions, AppDialog, ListItem } from '../ui/touch';
 import { useApp } from '../state/AppContext';
 import { setFlash } from '../state/flash';
 import { CATEGORIES, categoryById, NO_CATEGORY } from '../domain/categories';
@@ -137,7 +137,7 @@ export default function Lancamento() {
           <TextInput mode="outlined" label="Data" accessibilityLabel="Data" value={date} keyboardType="number-pad" placeholder="dd/mm/aaaa" onChangeText={(t) => setDate(maskDateInput(t))} error={Boolean(dateError)} />
           {dateError && <HelperText type="error" visible>{dateError}</HelperText>}
         </View>
-        <List.Item
+        <ListItem
           title="Categoria"
           description={cat.name}
           left={(p) => <List.Icon {...p} icon={cat.icon} />}
@@ -155,7 +155,7 @@ export default function Lancamento() {
           <Text variant="titleLarge" accessibilityRole="header">Categoria</Text>
           <ScrollView style={{ maxHeight: 480 }}>
             {[...CATEGORIES, NO_CATEGORY].map((c) => (
-              <List.Item
+              <ListItem
                 key={c.id ?? 'none'}
                 title={c.name}
                 left={(p) => <List.Icon {...p} icon={c.icon} />}
@@ -167,13 +167,13 @@ export default function Lancamento() {
             ))}
           </ScrollView>
         </Modal>
-        <Dialog visible={discardAsk} onDismiss={() => setDiscardAsk(false)}>
+        <AppDialog visible={discardAsk} onDismiss={() => setDiscardAsk(false)}>
           <Dialog.Title>Descartar as alterações?</Dialog.Title>
-          <Dialog.Actions>
+          <DialogActions>
             <Button onPress={() => setDiscardAsk(false)}>Continuar editando</Button>
             <Button onPress={() => { setDiscardAsk(false); setLeaving(() => pendingAction ?? (() => router.back())); }}>Descartar</Button>
-          </Dialog.Actions>
-        </Dialog>
+          </DialogActions>
+        </AppDialog>
       </Portal>
     </>
   );

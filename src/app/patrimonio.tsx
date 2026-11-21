@@ -3,12 +3,13 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { AccessibilityInfo, ScrollView, StyleSheet, View } from 'react-native';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { Card, Divider, Icon, List, Text } from 'react-native-paper';
-import { Button } from '../ui/touch';
+import { Button, ListItem } from '../ui/touch';
 import { useApp } from '../state/AppContext';
 import { useStartConnect } from '../state/hooks';
 import { formatBalance, formatDate, formatSignedAmount, formatWhen, spDateKey } from '../domain/format';
 import type { WealthPoint } from '../data/repo';
 import { Banner, EmptyState, Skeleton, styles as ui, useAppTheme } from '../ui/components';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 type Period = '1' | '3' | '6' | '12' | 'all';
 const DAY = 86400000;
@@ -106,6 +107,7 @@ export default function Patrimonio() {
   const hasInvestments = now.byConnection.some((c) => c.investments > 0);
 
   return (
+    <SafeAreaView edges={['left', 'right']} style={{ flex: 1 }}>
     <ScrollView contentContainerStyle={ui.scroll}>
       <View style={[ui.inner, { gap: 12 }]}>
         {/* 1. Patrimônio atual (RF-016.1): igual ao do Início. */}
@@ -232,11 +234,9 @@ export default function Patrimonio() {
         {now.byConnection.length > 0 && <Text variant="titleMedium" accessibilityRole="header" style={{ marginTop: 8 }}>Por instituição</Text>}
         {now.byConnection.map((c) => (
           <View key={c.item_id}>
-            <List.Item
-              titleNumberOfLines={3}
+            <ListItem
               title={c.name}
               description={`Investimentos ${formatBalance(c.investments)}${c.origin ? ` · dados de ${formatWhen(new Date(c.origin))}` : ''}`}
-              descriptionNumberOfLines={3}
               right={(p) => <List.Icon {...p} icon="chevron-right" />}
               onPress={() => router.push(`/conexoes/${c.item_id}`)}
               style={{ minHeight: 56 }}
@@ -246,6 +246,7 @@ export default function Patrimonio() {
         ))}
       </View>
     </ScrollView>
+    </SafeAreaView>
   );
 }
 

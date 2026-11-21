@@ -4,7 +4,7 @@ import { Linking, ScrollView, View } from 'react-native';
 import { router, useFocusEffect, useLocalSearchParams, useNavigation } from 'expo-router';
 import { openExtrato } from '../../state/nav';
 import { ActivityIndicator, Dialog, Divider, HelperText, List, Portal, Text, TextInput } from 'react-native-paper';
-import { Button, IconButton } from '../../ui/touch';
+import { Button, IconButton, DialogActions, AppDialog, ListAccordion, ListItem } from '../../ui/touch';
 import { useApp } from '../../state/AppContext';
 import { setFlash, takeFlash } from '../../state/flash';
 import { secure } from '../../services/secure';
@@ -37,7 +37,7 @@ function shortList(names: string[]): string {
 export default function ConexaoDetalhe() {
   const theme = useAppTheme();
   const navigation = useNavigation();
-  const { id, revogar: autoRevoke, autorizar: autoAuthorize, renovacao, mascarar, validade, credenciais, preview } = useLocalSearchParams<{ id: string; revogar?: string; autorizar?: string; renovacao?: string; mascarar?: string; validade?: string; credenciais?: string; preview?: string }>();
+  const { id, revogar: autoRevoke, autorizar: autoAuthorize, renovacao, mascarar, validade, credenciais, preview, dialogo } = useLocalSearchParams<{ dialogo?: string; id: string; revogar?: string; autorizar?: string; renovacao?: string; mascarar?: string; validade?: string; credenciais?: string; preview?: string }>();
   // Capturas de evidência (só em desenvolvimento): esconde valores e finais de conta; força validade e estado das credenciais.
   if (__DEV__ && mascarar === '1' && !isMaskingValues()) setMaskValues(true);
   if (__DEV__ && validade) setPreviewValidity(validade);
@@ -66,6 +66,15 @@ export default function ConexaoDetalhe() {
   const [gateFor, setGateFor] = useState<'revogar' | 'autorizar'>('revogar');
   const [notice, setNotice] = useState<string | null>(null);
   const autoOpened = useRef(false);
+  // Evidência (só em desenvolvimento): ?dialogo=apagar-dados|apagar-conta abre o diálogo que depende de estado
+  // (conexão revogada, conta sem autorização). A captura fecha com Voltar, sem tocar em nenhuma ação.
+  const forcedDialog = useRef<string | null>(null);
+  useEffect(() => {
+    if (!__DEV__ || !dialogo || !data || forcedDialog.current === dialogo) return;
+    forcedDialog.current = dialogo;
+    if (dialogo === 'apagar-dados') setWipeConfirm(true);
+    if (dialogo === 'apagar-conta' && data.accounts[0]) setDeleteAccount({ id: data.accounts[0].id, name: data.accounts[0].name });
+  }, [dialogo, data]);
 
   function startRevoke() {
     setRevokeError(null);
@@ -265,9 +274,7 @@ export default function ConexaoDetalhe() {
         {data.accounts.map((a) => a.unauthorized_at ? (
           // R-17 (UX 0.11): conta que não veio na nova autorização; não soma no saldo.
           <View key={a.id} style={{ gap: 4, paddingVertical: 8 }}>
-            <List.Item
-              titleNumberOfLines={3}
-              descriptionNumberOfLines={3}
+            <ListItem
               title={a.name}
               description={`Sem autorização · dados de ${formatWhen(new Date(a.unauthorized_at))}\nNão entra no saldo`}
               left={(p) => <List.Icon {...p} icon="link-off" />}
@@ -279,9 +286,7 @@ export default function ConexaoDetalhe() {
             <Button textColor={theme.colors.error} onPress={() => setDeleteAccount({ id: a.id, name: a.name })} style={{ alignSelf: 'flex-start' }}>Apagar esta conta</Button>
           </View>
         ) : (
-          <List.Item
-            titleNumberOfLines={3}
-            descriptionNumberOfLines={3}
+          <ListItem
             key={a.id}
             title={a.name}
             description={a.type === 'CREDIT' ? `Fatura atual${a.due_date ? ` · vence em ${formatDate(new Date(a.due_date))}` : ''}` : a.number ? `final ${isMaskingValues() ? '••••' : a.number.slice(-4)}` : undefined}
@@ -291,11 +296,11 @@ export default function ConexaoDetalhe() {
           />
         ))}
 
-        <List.Accordion title="Detalhes técnicos" expanded={tech} onPress={() => setTech(!tech)}>
+        <ListAccordion title="Detalhes técnicos" expanded={tech} onPress={() => setTech(!tech)}>
           <Text variant="bodySmall" selectable style={{ paddingHorizontal: 16 }}>
             {`Conexão: ${c.item_id}\nEstado: ${c.status ?? '—'}\nExecução: ${c.execution_status ?? '—'}\nCódigo: ${c.error_code ?? '—'}\nÚltima falha do app: ${c.last_sync_error ?? '—'}`}
           </Text>
-        </List.Accordion>
+        </ListAccordion>
 
         <Divider style={{ marginVertical: 16 }} />
         {awaiting ? (
@@ -308,12 +313,12 @@ export default function ConexaoDetalhe() {
 
       <Portal>
         {/* R-16: texto da confirmação é do Dev [a confirmar pelo Designer]; a spec pede "com confirmação". */}
-        <Dialog visible={wipeConfirm} onDismiss={() => setWipeConfirm(false)}>
+        <AppDialog visible={wipeConfirm} onDismiss={() => setWipeConfirm(false)}>
           <Dialog.Title>{`Apagar os dados de ${name}?`}</Dialog.Title>
           <Dialog.Content>
             <Text variant="bodyMedium">As contas, as transações e as categorias que você mudou nesta conexão são apagadas deste aparelho. Isso não pode ser desfeito.</Text>
           </Dialog.Content>
-          <Dialog.Actions>
+          <DialogActions>
             <Button onPress={() => setWipeConfirm(false)}>Cancelar</Button>
             <Button textColor={theme.colors.error} onPress={async () => {
               await repo.deleteConnectionData(id);
@@ -322,14 +327,14 @@ export default function ConexaoDetalhe() {
               bump();
               router.replace('/conexoes');
             }}>Apagar</Button>
-          </Dialog.Actions>
-        </Dialog>
-        <Dialog visible={deleteAccount !== null} onDismiss={() => setDeleteAccount(null)}>
+          </DialogActions>
+        </AppDialog>
+        <AppDialog visible={deleteAccount !== null} onDismiss={() => setDeleteAccount(null)}>
           <Dialog.Title>{`Apagar ${deleteAccount?.name ?? 'esta conta'}?`}</Dialog.Title>
           <Dialog.Content>
             <Text variant="bodyMedium">As transações dela e as categorias que você mudou são apagadas deste aparelho.</Text>
           </Dialog.Content>
-          <Dialog.Actions>
+          <DialogActions>
             <Button onPress={() => setDeleteAccount(null)}>Cancelar</Button>
             <Button textColor={theme.colors.error} onPress={async () => {
               if (deleteAccount) await repo.deleteAccountLocal(deleteAccount.id);
@@ -337,10 +342,10 @@ export default function ConexaoDetalhe() {
               bump();
               reload();
             }}>Apagar</Button>
-          </Dialog.Actions>
-        </Dialog>
+          </DialogActions>
+        </AppDialog>
         {/* REV-39: com o teclado aberto, o diálogo sobe para os botões ficarem visíveis. */}
-        <Dialog visible={renaming} onDismiss={() => setRenaming(false)} style={kbHeight ? { marginBottom: kbHeight } : undefined}>
+        <AppDialog visible={renaming} onDismiss={() => setRenaming(false)} style={kbHeight ? { marginBottom: kbHeight } : undefined}>
           <Dialog.Title>Renomear</Dialog.Title>
           <Dialog.Content>
             {/* UX 0.8 §7.4: com o nome sugerido, o campo abre vazio e o nome aparece acima. */}
@@ -348,12 +353,12 @@ export default function ConexaoDetalhe() {
             <TextInput mode="outlined" label="Nome da conexão" value={draftName} onChangeText={setDraftName} maxLength={30} autoFocus />
             <HelperText type="info">{`${draftName.length}/30`}</HelperText>
           </Dialog.Content>
-          <Dialog.Actions>
+          <DialogActions>
             <Button onPress={() => setRenaming(false)}>Cancelar</Button>
             <Button onPress={async () => { await repo.renameConnection(id, draftName); setRenaming(false); bump(); }}>Salvar</Button>
-          </Dialog.Actions>
-        </Dialog>
-        <Dialog visible={confirm} onDismiss={() => !revoking && setConfirm(false)} dismissable={!revoking}>
+          </DialogActions>
+        </AppDialog>
+        <AppDialog visible={confirm} onDismiss={() => !revoking && setConfirm(false)} dismissable={!revoking}>
           <Dialog.Title>{data.other && data.accounts.length === 0 ? 'Revogar a conexão repetida?' : realName ? `Revogar a conexão com ${realName}?` : 'Revogar esta conexão?'}</Dialog.Title>
           <Dialog.Content style={{ gap: 8 }}>
             {revoking ? (
@@ -396,14 +401,14 @@ export default function ConexaoDetalhe() {
             )}
           </Dialog.Content>
           {!revoking && (
-            <Dialog.Actions>
+            <DialogActions>
               {/* Foco inicial em "Cancelar": vem primeiro na ordem de leitura. */}
               <Button onPress={() => setConfirm(false)}>Cancelar</Button>
               <Button textColor={theme.colors.error} onPress={revogar}>Revogar</Button>
-            </Dialog.Actions>
+            </DialogActions>
           )}
-        </Dialog>
-        <Dialog visible={credGate !== null} onDismiss={() => setCredGate(null)}>
+        </AppDialog>
+        <AppDialog visible={credGate !== null} onDismiss={() => setCredGate(null)}>
           <Dialog.Icon icon="information-outline" />
           <Dialog.Title>{`${credGate === 'rejected' ? 'Troque suas credenciais' : 'Configure suas credenciais'} para ${gateFor === 'autorizar' ? 'autorizar de novo' : 'revogar'}`}</Dialog.Title>
           <Dialog.ScrollArea style={{ maxHeight: 420, paddingHorizontal: 24 }}>
@@ -418,15 +423,15 @@ export default function ConexaoDetalhe() {
               <NoCredentialsHelp action="revogar" onFindCredentials={async () => { setCredGate(null); await repo.setState('guide_step', '2'); router.push({ pathname: '/guia', params: { voltar: `/conexoes/${id}` } }); }} />
             </ScrollView>
           </Dialog.ScrollArea>
-          <Dialog.Actions>
+          <DialogActions>
             <Button onPress={() => setCredGate(null)}>Cancelar</Button>
             {credGate === 'rejected' ? (
               <Button onPress={() => { setCredGate(null); router.push({ pathname: '/credenciais/informar', params: { voltar: `/conexoes/${id}` } }); }}>Trocar credenciais</Button>
             ) : (
               <Button onPress={() => { setCredGate(null); router.push({ pathname: '/guia', params: { voltar: `/conexoes/${id}` } }); }}>Configurar credenciais</Button>
             )}
-          </Dialog.Actions>
-        </Dialog>
+          </DialogActions>
+        </AppDialog>
       </Portal>
     </>
   );

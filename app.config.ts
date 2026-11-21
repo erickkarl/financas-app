@@ -14,7 +14,7 @@ const plugins: ExpoConfig['plugins'] = [
 const config: ExpoConfig = {
   name: 'Finanças',
   slug: 'financas-app',
-  version: '0.2.0',
+  version: '0.3.0',
   scheme: 'financasapp',
   orientation: 'default',
   icon: './assets/icon.png',
@@ -27,7 +27,7 @@ const config: ExpoConfig = {
   android: {
     package: 'dev.financas.app',
     // Ciclo 2. Maior que o da 0.1.0 (1), para instalar por cima sem apagar os dados.
-    versionCode: 2,
+    versionCode: 3,
     // Dados financeiros não vão para o backup em nuvem do Android (RNF-002).
     allowBackup: false,
     adaptiveIcon: {

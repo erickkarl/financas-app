@@ -1,15 +1,16 @@
-// T-18 Resumo mensal — RF-008.1 a RF-008.9 (UX 0.7 a 0.16) e o aviso da fatura de R-2.1 (requisitos v1.20).
+// T-18 Resumo mensal (UX 0.19: página do mês, aberta pela T-23, título "Resumo do mês") — RF-008.1 a RF-008.9 (UX 0.7 a 0.16) e o aviso da fatura de R-2.1 (requisitos v1.20).
 import React, { useCallback, useState } from 'react';
 import { RefreshControl, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
-import { openExtrato as goExtrato } from '../../state/nav';
+import { openExtrato as goExtrato } from '../../../state/nav';
 import { Card, Divider, Icon, ProgressBar, Text, TouchableRipple } from 'react-native-paper';
-import { Button, IconButton } from '../../ui/touch';
-import { useApp } from '../../state/AppContext';
-import { categoryById } from '../../domain/categories';
-import { balanceA11y, formatBalance, formatCount, formatMonth, formatSignedAmount, isMaskingValues, setMaskValues, spDateKey } from '../../domain/format';
-import type { MonthSummary } from '../../data/repo';
-import { Amount, Banner, EmptyState, Skeleton, styles as ui, useAppTheme } from '../../ui/components';
+import { Button, IconButton } from '../../../ui/touch';
+import { useApp } from '../../../state/AppContext';
+import { categoryById } from '../../../domain/categories';
+import { balanceA11y, formatBalance, formatCount, formatMonth, formatSignedAmount, isMaskingValues, setMaskValues, spDateKey } from '../../../domain/format';
+import type { MonthSummary } from '../../../data/repo';
+import { Amount, Banner, EmptyState, Skeleton, styles as ui, useAppTheme } from '../../../ui/components';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 const shiftMonth = (ym: string, d: number) => {
   const [y, m] = ym.split('-').map(Number);
@@ -201,6 +202,7 @@ export default function Resumo() {
   }
 
   return (
+    <SafeAreaView edges={['left', 'right']} style={{ flex: 1 }}>
     <ScrollView contentContainerStyle={ui.scroll} refreshControl={<RefreshControl refreshing={false} onRefresh={() => { refreshAll(true).finally(load); }} />}>
       <View style={[ui.inner, { gap: 12 }]}>
         <View style={s.line}>
@@ -211,6 +213,7 @@ export default function Resumo() {
         {body}
       </View>
     </ScrollView>
+    </SafeAreaView>
   );
 }
 

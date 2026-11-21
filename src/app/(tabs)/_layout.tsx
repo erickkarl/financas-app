@@ -20,8 +20,8 @@ export default function TabsLayout() {
   const theme = useAppTheme();
   const { fontScale, width } = useWindowDimensions();
   // REV-19: título alinhado à coluna de conteúdo (máx. 640 dp centralizada).
-  const columnInset = Math.max(0, (width - 640) / 2);
   const insets = useSafeAreaInsets();
+  const columnInset = Math.max(0, (width - insets.left - insets.right - 640) / 2);
   // Altura cresce com a fonte do sistema (UX-033): ícone + rótulo nunca cortados.
   const tabHeight = 40 + Math.ceil(18 * Math.max(1, fontScale)) + insets.bottom;
   return (
@@ -35,14 +35,17 @@ export default function TabsLayout() {
         tabBarLabelPosition: 'below-icon',
         headerStyle: { backgroundColor: theme.colors.surface },
         headerTintColor: theme.colors.onSurface,
-        headerTitleContainerStyle: { marginLeft: 16 + Math.max(0, columnInset - insets.left) },
-        headerRightContainerStyle: { marginRight: Math.max(0, columnInset - insets.right) },
+        // C3-09: a barra já recua a área segura; o título completa até a coluna das telas, que é centrada na área
+        // útil (largura menos as duas áreas seguras), e não na tela inteira. Com o recorte da câmera de um lado só,
+        // a conta antiga deixava o título 68 px antes da coluna.
+        headerTitleContainerStyle: { marginLeft: 16 + columnInset },
+        headerRightContainerStyle: { marginRight: columnInset },
         sceneStyle: { backgroundColor: theme.colors.background },
       }}
     >
       <Tabs.Screen name="index" options={{ title: 'Início', tabBarIcon: ({ color, size, focused }) => <TabIcon icon="home-outline" color={String(color)} size={size} focused={focused} /> }} />
       <Tabs.Screen name="extrato" options={{ title: 'Extrato', tabBarIcon: ({ color, size, focused }) => <TabIcon icon="format-list-bulleted" color={String(color)} size={size} focused={focused} /> }} />
-      <Tabs.Screen name="resumo" options={{ title: 'Resumo', tabBarIcon: ({ color, size, focused }) => <TabIcon icon="chart-box-outline" color={String(color)} size={size} focused={focused} /> }} />
+      <Tabs.Screen name="resumo" options={{ title: 'Resumo', headerShown: false, tabBarIcon: ({ color, size, focused }) => <TabIcon icon="chart-box-outline" color={String(color)} size={size} focused={focused} /> }} />
       <Tabs.Screen name="ajustes" options={{ title: 'Ajustes', tabBarIcon: ({ color, size, focused }) => <TabIcon icon="cog-outline" color={String(color)} size={size} focused={focused} /> }} />
     </Tabs>
   );

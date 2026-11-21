@@ -1,10 +1,10 @@
 // T-15 Detalhe da transação + T-16 Escolher categoria — RF-006, RF-007.2, PM-7, PM-8
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { Dialog, Divider, Icon, List, Modal, Portal, Snackbar, Switch, Text } from 'react-native-paper';
 import { setFlash, takeFlash } from '../../state/flash';
-import { Button } from '../../ui/touch';
+import { Button, DialogActions, AppDialog, ListAccordion, ListItem } from '../../ui/touch';
 import { useApp } from '../../state/AppContext';
 import { CATEGORIES, categoryById, NO_CATEGORY } from '../../domain/categories';
 import { accountConnectionLine, displayDescription, formatCount, formatDate, formatMonth, setMaskValues, isMaskingValues } from '../../domain/format';
@@ -15,7 +15,7 @@ type Undo = { message: string; undo: () => Promise<void> };
 
 export default function TransacaoDetalhe() {
   const theme = useAppTheme();
-  const { id, mascarar } = useLocalSearchParams<{ id: string; mascarar?: string }>();
+  const { id, mascarar, dialogo } = useLocalSearchParams<{ id: string; mascarar?: string; dialogo?: string }>();
   if (__DEV__ && mascarar === '1' && !isMaskingValues()) setMaskValues(true);
   const { repo, bump } = useApp();
   const [tx, setTx] = useState<TransactionRow | null | undefined>(undefined);
@@ -26,6 +26,13 @@ export default function TransacaoDetalhe() {
   // UX 0.17 (RF-006.3, E-12 a): aviso dos lançamentos anteriores do mesmo destinatário, até ser usado ou fechado.
   const [previous, setPrevious] = useState<null | { n: number; change: CategoryChange; category: string }>(null);
   const [confirmApply, setConfirmApply] = useState(false);
+  // Evidência (só em desenvolvimento): ?dialogo=mudar abre "Mudar N lançamentos anteriores…" com 3 de exemplo.
+  // A captura fecha com Voltar, sem tocar em nenhuma ação.
+  useEffect(() => {
+    if (!__DEV__ || dialogo !== 'mudar') return;
+    setPrevious({ n: 3, change: { remembered: true, others: 3 } as never, category: 'mercado' });
+    setConfirmApply(true);
+  }, [dialogo]);
   const [helpOpen, setHelpOpen] = useState(false);
   // Recarrega ao voltar de T-17 (edição de lançamento manual).
   useFocusEffect(useCallback(() => {
@@ -188,11 +195,10 @@ export default function TransacaoDetalhe() {
         )}
         <Text variant="bodyMedium">{accountConnectionLine(tx.account_name, tx.account_subtype, tx.connection_name)}</Text>
         <Divider style={{ marginVertical: 8 }} />
-        <List.Item
+        <ListItem
           title="Categoria"
           // UX 0.17 (RF-006.3): categoria que veio da lembrança do destinatário.
           description={tx.remembered ? `${cat.name}\nLembrada para este destinatário.` : cat.name}
-          descriptionNumberOfLines={3}
           left={(p) => <List.Icon {...p} icon={cat.icon} />}
           right={(p) => <List.Icon {...p} icon="chevron-right" />}
           onPress={() => setPicker(true)}
@@ -210,7 +216,7 @@ export default function TransacaoDetalhe() {
             onSecondary={() => setPrevious(null)}
           />
         )}
-        <List.Item title="Origem" description={tx.manual ? 'Manual' : `Importada de ${tx.connection_name ?? 'Meu Pluggy'}`} style={{ minHeight: 56 }} />
+        <ListItem title="Origem" description={tx.manual ? 'Manual' : `Importada de ${tx.connection_name ?? 'Meu Pluggy'}`} style={{ minHeight: 56 }} />
         <OptionRow
           kind="switch"
           label="Transferência entre minhas contas"
@@ -226,9 +232,9 @@ export default function TransacaoDetalhe() {
           disabled={tx.transfer === 1}
           onPress={() => toggleOut(tx.out_of_summary !== 1)}
         />
-        <List.Accordion title="Quando usar" expanded={helpOpen} onPress={() => setHelpOpen(!helpOpen)} style={{ minHeight: 48 }}>
+        <ListAccordion title="Quando usar" expanded={helpOpen} onPress={() => setHelpOpen(!helpOpen)} style={{ minHeight: 48 }}>
           <Text variant="bodyMedium" style={{ paddingHorizontal: 16, paddingBottom: 8 }}>Use para o que passa pela sua conta mas não é gasto nem ganho seu, como um imposto da sua empresa (DAS, DARF) pago pela conta pessoal.</Text>
-        </List.Accordion>
+        </ListAccordion>
         <Divider style={{ marginVertical: 8 }} />
         {tx.manual ? (
           // RF-007 (T-15): lançamento manual pode ser editado e excluído.
@@ -251,18 +257,18 @@ export default function TransacaoDetalhe() {
       </Screen>
 
       <Portal>
-        <Dialog visible={confirmApply} onDismiss={() => setConfirmApply(false)}>
+        <AppDialog visible={confirmApply} onDismiss={() => setConfirmApply(false)}>
           <Dialog.Title>{previous ? `Mudar ${formatCount(previous.n)} ${previous.n === 1 ? 'lançamento anterior' : 'lançamentos anteriores'} para ${categoryById(previous.category).name}?` : ''}</Dialog.Title>
           <Dialog.Content><Text variant="bodyMedium">Os que você já categorizou à mão não mudam.</Text></Dialog.Content>
-          <Dialog.Actions>
+          <DialogActions>
             <Button onPress={() => setConfirmApply(false)}>Cancelar</Button>
             <Button onPress={applyPrevious}>Mudar</Button>
-          </Dialog.Actions>
-        </Dialog>
-        <Dialog visible={confirmDelete} onDismiss={() => setConfirmDelete(false)}>
+          </DialogActions>
+        </AppDialog>
+        <AppDialog visible={confirmDelete} onDismiss={() => setConfirmDelete(false)}>
           <Dialog.Title>Excluir este lançamento?</Dialog.Title>
           <Dialog.Content><Text variant="bodyMedium">Esta ação não pode ser desfeita.</Text></Dialog.Content>
-          <Dialog.Actions>
+          <DialogActions>
             <Button onPress={() => setConfirmDelete(false)}>Cancelar</Button>
             <Button textColor={theme.colors.error} onPress={async () => {
               await repo.deleteManual(current.id);
@@ -271,18 +277,17 @@ export default function TransacaoDetalhe() {
               setFlash('extrato', 'Lançamento excluído');
               router.back();
             }}>Excluir</Button>
-          </Dialog.Actions>
-        </Dialog>
+          </DialogActions>
+        </AppDialog>
         <Modal visible={picker} onDismiss={() => setPicker(false)} contentContainerStyle={{ backgroundColor: theme.colors.surface, marginTop: 'auto', padding: 16, borderTopLeftRadius: 28, borderTopRightRadius: 28, maxHeight: '80%', maxWidth: 640, width: '100%', alignSelf: 'center' }}>
           <Text variant="titleLarge" accessibilityRole="header" style={{ marginBottom: 8 }}>Escolher categoria</Text>
           <ScrollView>
             {[...CATEGORIES.map((c) => ({ id: c.id as string, name: c.name, icon: c.icon })), { id: 'none', name: NO_CATEGORY.name, icon: NO_CATEGORY.icon }].map((c) => {
               const selected = (tx.category ?? 'none') === c.id;
               return (
-                <List.Item
+                <ListItem
                   key={c.id}
                   title={c.name}
-                  titleNumberOfLines={2}
                   left={(p) => <List.Icon {...p} icon={c.icon} />}
                   right={(p) => (selected ? <List.Icon {...p} icon="check" color={theme.colors.primary} /> : null)}
                   onPress={() => chooseCategory(c.id === 'none' ? null : c.id)}

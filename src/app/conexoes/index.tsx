@@ -4,7 +4,7 @@ import { Linking, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { revokedMessage } from '../../domain/revokeText';
 import { Divider, Icon, List, Text } from 'react-native-paper';
-import { Button } from '../../ui/touch';
+import { Button, ListItem } from '../../ui/touch';
 import { useApp } from '../../state/AppContext';
 import { takeFlash } from '../../state/flash';
 import { useLoad, useStartConnect } from '../../state/hooks';
@@ -83,9 +83,7 @@ export default function Conexoes() {
           const iconFor = { ok: 'check-circle-outline', progress: 'sync', warning: 'alert-outline', error: 'alert-circle-outline', pending: 'timer-sand' }[view.tone];
           return (
             <View key={c.item_id}>
-              <List.Item
-                titleNumberOfLines={3}
-                descriptionNumberOfLines={3}
+              <ListItem
                 title={name}
                 description={() => (
                   <View>

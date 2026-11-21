@@ -3,10 +3,10 @@
 // exclusão em duas fases (Pluggy, depois o aparelho) → guia, como numa primeira abertura.
 // Nunca diz que excluiu o que continua no Pluggy ou no aparelho.
 import React, { useCallback, useEffect, useState } from 'react';
-import { BackHandler, Linking, View } from 'react-native';
+import { BackHandler, Linking, useWindowDimensions, View } from 'react-native';
 import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { ActivityIndicator, Dialog, Portal, Text } from 'react-native-paper';
-import { Button } from '../ui/touch';
+import { Button, DialogActions, AppDialog, isForceLoading } from '../ui/touch';
 import { useApp } from '../state/AppContext';
 import { setFlash, takeFlash } from '../state/flash';
 import { useLoad } from '../state/hooks';
@@ -46,6 +46,12 @@ export default function Privacidade() {
     pv === 'falha-parcial' ? deletionMessage({ kind: 'partial', deleted: ['Banco Aurora S.A. (Conta Pré-paga)'], failed: ['BANCO AZUL'] }) : null,
   );
   const [checking, setChecking] = useState(pv === 'conferindo');
+  const busy = checking || isForceLoading();
+  // C3-20: cabem lado a lado "Cancelar" e o rótulo mais longo (carregando)? Mesma estimativa de largura do botão.
+  const { width: winW, fontScale } = useWindowDimensions();
+  // labelLarge (14 sp): cerca de 7,5 dp por letra. Lado a lado, sem quebra de linha: se faltar pouco, o rótulo usa 2 linhas e nada muda de lugar.
+  const btnW = (label: string, padH: number, extra = 0) => Math.ceil(label.length * 7.5 * Math.max(fontScale, 1)) + padH + extra;
+  const actionsStacked = btnW('Cancelar', 24) + 8 + btnW('Conferindo suas credenciais…', 48, 26) > Math.min(winW, 640) - 32;
   const [progress, setProgress] = useState<Progress>(pv === 'excluindo' ? { phase: 'remote', done: 1, total: 2 } : pv === 'apagando' ? { phase: 'local' } : { phase: 'remote', done: 0, total: 0 });
   const [notice, setNotice] = useState<string | null>(null);
   const { data: conns } = useLoad(() => repo.listConnections());
@@ -189,10 +195,12 @@ export default function Privacidade() {
                 </View>
               </View>
             ) : (
-              <View style={{ flexDirection: 'row', gap: 8, marginTop: 16, flexWrap: 'wrap' }}>
-                <Button onPress={() => router.back()} disabled={checking}>Cancelar</Button>
-                <Button mode="contained" buttonColor={theme.colors.error} textColor={theme.colors.onError} onPress={continuar} loading={checking} disabled={checking}>
-                  {checking ? 'Conferindo suas credenciais…' : 'Continuar'}
+              // C3-20: a posição dos botões não muda ao carregar. A decisão de pôr lado a lado ou empilhar usa o rótulo
+              // mais longo ("Conferindo suas credenciais…"); empilhados, "Cancelar" fica em cima, como nos diálogos.
+              <View style={{ flexDirection: actionsStacked ? 'column' : 'row', alignItems: actionsStacked ? 'flex-start' : 'center', gap: 8, marginTop: 16 }}>
+                <Button onPress={() => router.back()} disabled={busy}>Cancelar</Button>
+                <Button mode="contained" buttonColor={theme.colors.error} textColor={theme.colors.onError} onPress={continuar} loading={busy} disabled={busy}>
+                  {busy ? 'Conferindo suas credenciais…' : 'Continuar'}
                 </Button>
               </View>
             )}
@@ -200,16 +208,16 @@ export default function Privacidade() {
         )}
       </Screen>
       <Portal>
-        <Dialog visible={step === 'confirm'} onDismiss={() => setStep('explain')}>
+        <AppDialog visible={step === 'confirm'} onDismiss={() => setStep('explain')}>
           <Dialog.Title>Apagar todos os dados?</Dialog.Title>
           <Dialog.Content>
             <Text variant="bodyMedium">Esta ação não pode ser desfeita.</Text>
           </Dialog.Content>
-          <Dialog.Actions>
+          <DialogActions>
             <Button onPress={() => setStep('explain')}>Cancelar</Button>
             <Button textColor={theme.colors.error} onPress={excluir}>Apagar tudo</Button>
-          </Dialog.Actions>
-        </Dialog>
+          </DialogActions>
+        </AppDialog>
       </Portal>
     </>
   );

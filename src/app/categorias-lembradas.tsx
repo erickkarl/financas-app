@@ -12,7 +12,7 @@ import { displayDescription, formatCount, formatDate, formatSignedAmount, isMask
 import { maskDoc, type RecipientKey } from '../domain/recipient';
 import type { RememberedListRow, RememberedRow } from '../data/repo';
 import { announce, EmptyState, Screen, Skeleton, useAppTheme } from '../ui/components';
-import { Button, IconButton } from '../ui/touch';
+import { Button, IconButton, DialogActions, AppDialog } from '../ui/touch';
 
 export default function CategoriasLembradas() {
   const theme = useAppTheme();
@@ -30,7 +30,10 @@ export default function CategoriasLembradas() {
       const list = await repo.listRemembered();
       // Captura de evidência (só em desenvolvimento): ?preview=sem-lancamento mostra a linha como depois de revogar,
       // sem revogar a conexão real.
-      setRows(__DEV__ && preview === 'sem-lancamento' ? list.map((r) => ({ ...r, last: null, last_tx_id: null })) : list);
+      // ?preview=exemplo mostra uma lembrança de exemplo (dados inventados, nada gravado) para capturar "Esquecer
+      // todas" sem trocar a categoria de uma transação real. Só a captura usa; nenhuma ação é tocada.
+      const example: RememberedListRow = { doc_type: 'CPF', doc: '00000000000', category: 'mercado', tx_count: 1, last_tx_date: '2026-11-21', created_at: '2026-11-21T12:00:00Z', used_at: '2026-11-21T12:00:00Z', last_tx_id: null, last: { description: 'PIX ENVIADO EXEMPLO', date_key: '2026-11-21', amount: -10 } };
+      setRows(__DEV__ && preview === 'sem-lancamento' ? list.map((r) => ({ ...r, last: null, last_tx_id: null })) : __DEV__ && preview === 'exemplo' ? [...list, example] : list);
     } catch {
       setError(true);
     }
@@ -123,15 +126,15 @@ export default function CategoriasLembradas() {
     <>
       <Screen style={{ paddingTop: 16, gap: 8 }}>{body}</Screen>
       <Portal>
-        <Dialog visible={confirmAll} onDismiss={() => setConfirmAll(false)}>
+        <AppDialog visible={confirmAll} onDismiss={() => setConfirmAll(false)}>
           <Dialog.Title>{(rows?.length ?? 0) === 1 ? 'Esquecer a categoria lembrada?' : `Esquecer as ${formatCount(rows?.length ?? 0)} categorias lembradas?`}</Dialog.Title>
           <Dialog.Content><Text variant="bodyMedium">{`Os lançamentos já categorizados continuam como estão. O app deixa de sugerir ${(rows?.length ?? 0) === 1 ? 'essa categoria' : 'essas categorias'}.`}</Text></Dialog.Content>
-          <Dialog.Actions>
+          <DialogActions>
             {/* Foco inicial em "Cancelar": vem primeiro na ordem de leitura. */}
             <Button onPress={() => setConfirmAll(false)}>Cancelar</Button>
             <Button textColor={theme.colors.error} onPress={forgetAll}>Esquecer todas</Button>
-          </Dialog.Actions>
-        </Dialog>
+          </DialogActions>
+        </AppDialog>
       </Portal>
       <Snackbar visible={!!snack} onDismiss={() => setSnack(null)} duration={5000} action={snack?.undo ? { label: 'Desfazer', onPress: () => snack.undo?.() } : undefined}>
         {snack?.message}

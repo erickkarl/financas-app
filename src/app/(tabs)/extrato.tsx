@@ -1,4 +1,5 @@
 // T-13 Extrato + T-14 Filtros — RF-005, RF-006.1, RF-007.2
+import { SafeAreaView } from 'react-native-safe-area-context';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ScrollView, SectionList, StyleSheet, View } from 'react-native';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
@@ -6,7 +7,7 @@ import { recipientFromToken } from '../../state/nav';
 import type { RecipientKey } from '../../domain/recipient';
 import { takeFlash } from '../../state/flash';
 import { Chip, Divider, FAB, List, Modal, Portal, Snackbar, Text, TextInput, TouchableRipple } from 'react-native-paper';
-import { Button } from '../../ui/touch';
+import { Button, ListItem } from '../../ui/touch';
 import { useApp } from '../../state/AppContext';
 import { useStartConnect } from '../../state/hooks';
 import { CATEGORIES, NO_CATEGORY } from '../../domain/categories';
@@ -243,8 +244,9 @@ export default function Extrato() {
   else if (total === 0) body = <EmptyState icon="receipt" title="Ainda não há transações." text="Conecte uma instituição ou lance um valor à mão." actionLabel="Conectar instituição" onAction={startConnect} />;
   else if (rows.length === 0 && futures.length === 0) body = <EmptyState icon="magnify" title="Nenhuma transação encontrada." text="Tente mudar a busca ou os filtros." actionLabel="Limpar filtros" onAction={clearAll} />;
 
+  // C3-09: a coluna respeita a área segura dos lados, como nas outras telas (e o título da barra).
   return (
-    <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
+        <SafeAreaView edges={['left', 'right']} style={{ flex: 1, backgroundColor: theme.colors.background }}>
       <SectionList
         sections={body ? [] : sections}
         keyExtractor={(t) => t.id}
@@ -277,7 +279,7 @@ export default function Extrato() {
             ['investments', 'Investimentos', sums.byReason.investments],
             ['out', 'Fora do Resumo', sums.byReason.out],
           ] as [string, string, number][]).filter(([, , n]) => n > 0).map(([k, label, n]) => (
-            <List.Item
+            <ListItem
               key={k}
               title={label}
               right={() => <Text variant="titleMedium" style={ui.tabular}>{formatCount(n)}</Text>}
@@ -314,7 +316,7 @@ export default function Extrato() {
         onlyOut={only === 'out'}
         onOnlyOut={(v) => setOnly(v ? 'out' : undefined)}
       />
-    </View>
+    </SafeAreaView>
   );
 }
 
