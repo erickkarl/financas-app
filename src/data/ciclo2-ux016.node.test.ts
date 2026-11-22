@@ -41,7 +41,7 @@ describe('UX 0.16', () => {
     const ex = await repo.sums({ ...month, only: 'out' });
     const s = await repo.monthSummary('2026-11', '2026-11-19');
     expect(ex.out).toEqual({ count: 1, saidas: 120, entradas: 0 });
-    expect(ex.out).toEqual(s.outOfSummary);
+    expect({ ...ex.out, reimbursements: 0 }).toEqual(s.outOfSummary);
   });
   test('Aviso da fatura: contagem dos sem par; "Ver no extrato" só com eles; some ao marcar o último', async () => {
     const { repo } = await setup();

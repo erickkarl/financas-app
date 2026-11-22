@@ -9,7 +9,7 @@ import { useApp } from '../../../state/AppContext';
 import { categoryById } from '../../../domain/categories';
 import { balanceA11y, formatBalance, formatCount, formatMonth, formatSignedAmount, isMaskingValues, setMaskValues, spDateKey } from '../../../domain/format';
 import type { MonthSummary } from '../../../data/repo';
-import { Amount, Banner, EmptyState, Skeleton, styles as ui, useAppTheme } from '../../../ui/components';
+import { Amount, announce, Banner, EmptyState, Skeleton, styles as ui, useAppTheme } from '../../../ui/components';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 const shiftMonth = (ym: string, d: number) => {
@@ -23,7 +23,7 @@ const pctLabel = (part: number, total: number) => { const p = pct(part, total); 
 
 export default function Resumo() {
   const theme = useAppTheme();
-  const { repo, dataVersion, refreshAll } = useApp();
+  const { repo, dataVersion, refreshAll, bump } = useApp();
   // Fonte grande: o valor e o percentual descem para baixo do nome, para o nome não quebrar no meio da palavra.
   const stacked = useWindowDimensions().fontScale >= 1.5;
   const { mascarar, mes, preview } = useLocalSearchParams<{ mascarar?: string; mes?: string; preview?: string }>();
@@ -33,6 +33,8 @@ export default function Resumo() {
   const [month, setMonth] = useState(mes && /^\d{4}-\d{2}$/.test(mes) ? mes : thisMonth);
   const [data, setData] = useState<MonthSummary | null>(null);
   const [error, setError] = useState(false);
+  // UX 0.21 (E-20 a): aviso do mês que mudou por um reembolso que chegou depois.
+  const [notice, setNotice] = useState<Awaited<ReturnType<typeof repo.refundMonthNotice>>>(null);
 
   const load = useCallback(async () => {
     setError(false);
@@ -42,10 +44,15 @@ export default function Resumo() {
       // porque nos dados reais todos os pagamentos de fatura têm par.
       if (__DEV__ && preview?.startsWith('fatura')) summary.unpairedBills = Number(preview.slice(6)) || 1;
       setData(summary);
+      // Evidência (só em desenvolvimento): ?preview=reembolso força o aviso de mês que mudou (valor de exemplo, mascarado).
+      const n = __DEV__ && preview === 'reembolso' ? { count: 1, total: 249.9, date: today, side: 'despesas' as const }
+        : month < thisMonth ? await repo.refundMonthNotice(month) : null;
+      setNotice(n);
+      if (n) announce(noticeText(n));
     } catch {
       setError(true);
     }
-  }, [repo, month, today, preview]);
+  }, [repo, month, today, preview, thisMonth]);
   useFocusEffect(useCallback(() => { load(); }, [load, dataVersion]));
 
   const [y, m] = month.split('-').map(Number);
@@ -86,6 +93,17 @@ export default function Resumo() {
             )}
           </Card.Content>
         </Card>
+        {notice && (
+          <Banner
+            tone="info"
+            icon="information-outline"
+            text={noticeText(notice)}
+            actionLabel="Ver no extrato"
+            onAction={() => goExtrato({ from, to, only: 'reimb' })}
+            secondaryLabel="Fechar"
+            onSecondary={async () => { await repo.dismissRefundMonth(month); setNotice(null); bump(); }}
+          />
+        )}
         {/* RF-008.1: conferível com o extrato do mesmo mês. */}
         <View style={[s.line, { flexWrap: 'wrap' }]}>
           <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant, flexShrink: 1 }}>Receitas − despesas = resultado</Text>
@@ -95,6 +113,8 @@ export default function Resumo() {
           Transferências entre suas contas, aplicações e resgates de investimentos, transações ocultas e o que você marcou como fora do Resumo não entram.
           {/* UX 0.17 (RF-008.10) */}
           {d.refunds.count > 0 ? ' Estornos de compras no cartão reduzem as despesas, em vez de contar como receita.' : ''}
+          {/* UX 0.21 (RF-008.11): só no mês que tem par. */}
+          {d.outOfSummary.reimbursements > 0 ? ' Reembolsos reconhecidos e as saídas que eles devolveram também não entram.' : ''}
         </Text>
         {/* UX 0.8 / C2-05: frase das futuras com "Ver no extrato", que abre o mês com o grupo "Futuras" aberto. */}
         {d.futureCount > 0 && (
@@ -127,7 +147,7 @@ export default function Resumo() {
                 <Text variant="titleSmall" style={ui.tabular}>
                   {`Fora do Resumo: ${formatBalance(d.outOfSummary.saidas)} (${formatCount(d.outOfSummary.count)} ${d.outOfSummary.count === 1 ? 'lançamento' : 'lançamentos'})${d.outOfSummary.entradas > 0 ? ` e ${formatBalance(d.outOfSummary.entradas)} em entradas` : ''}`}
                 </Text>
-                <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>Não conta como receita nem despesa.</Text>
+                <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>{`Não conta como receita nem despesa.${d.outOfSummary.reimbursements > 0 ? ` Inclui ${formatCount(d.outOfSummary.reimbursements)} de reembolso.` : ''}`}</Text>
               </View>
               <Icon source="chevron-right" size={24} color={theme.colors.onSurfaceVariant} />
             </View>
@@ -224,3 +244,11 @@ const s = StyleSheet.create({
   catRow: { minHeight: 56, justifyContent: 'center', paddingVertical: 6 },
   navRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
 });
+
+/** UX 0.21 (E-20 a): "Este mês mudou em 21/11/2026. 1 reembolso que chegou depois tirou R$ 249,90 das despesas." */
+function noticeText(n: { count: number; total: number; date: string; side: 'despesas' | 'receitas' }): string {
+  const d = `${n.date.slice(8, 10)}/${n.date.slice(5, 7)}/${n.date.slice(0, 4)}`;
+  return n.count === 1
+    ? `Este mês mudou em ${d}. 1 reembolso que chegou depois tirou ${formatBalance(n.total)} das ${n.side}.`
+    : `Este mês mudou em ${d}. ${formatCount(n.count)} reembolsos que chegaram depois tiraram ${formatBalance(n.total)} das ${n.side}.`;
+}

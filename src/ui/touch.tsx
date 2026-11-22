@@ -155,3 +155,31 @@ export function ListItem(props: React.ComponentProps<typeof List.Item>) {
 export function ListAccordion(props: React.ComponentProps<typeof List.Accordion>) {
   return <List.Accordion titleNumberOfLines={0} descriptionNumberOfLines={0} {...props} />;
 }
+
+/**
+ * C4-04 (revisão do ciclo 4): chip do app sem limite de linhas. O Chip do Paper prende o rótulo em uma linha, e um nome
+ * de conta longo saía cortado. Alvo de 48 dp; marca de seleção (forma, não só cor); "×" com nome próprio.
+ */
+export function AppChip({ label, selected = false, onPress, onClose, closeLabel, role = 'button' }: {
+  label: string; selected?: boolean; onPress?: () => void; onClose?: () => void; closeLabel?: string; role?: 'button' | 'checkbox' | 'radio';
+}) {
+  const theme = useTheme<MD3Theme>();
+  const body = (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 6, paddingLeft: selected ? 8 : 12, paddingRight: onClose ? 4 : 12 }}>
+      {selected && <Icon source="check" size={18} color={theme.colors.onSecondaryContainer} />}
+      <Text variant="labelLarge" style={{ flexShrink: 1, color: selected ? theme.colors.onSecondaryContainer : theme.colors.onSurfaceVariant }}>{label}</Text>
+      {onClose && <PaperIconButton icon="close" size={18} onPress={onClose} accessibilityLabel={closeLabel ?? `Limpar ${label}`} style={{ margin: 0, width: 36, height: 36 }} />}
+    </View>
+  );
+  return (
+    <View style={{ minHeight: 48, justifyContent: 'center', maxWidth: '100%' }}>
+      <View style={{ borderRadius: 8, borderWidth: 1, borderColor: selected ? 'transparent' : theme.colors.outline, backgroundColor: selected ? theme.colors.secondaryContainer : 'transparent', overflow: 'hidden', maxWidth: '100%' }}>
+        {onPress ? (
+          <TouchableRipple onPress={onPress} accessibilityRole={role} accessibilityState={role === 'button' ? undefined : { checked: selected }} accessibilityLabel={label}>{body}</TouchableRipple>
+        ) : (
+          <View accessible={!onClose} accessibilityLabel={`Filtro ${label}`}>{body}</View>
+        )}
+      </View>
+    </View>
+  );
+}

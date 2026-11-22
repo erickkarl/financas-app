@@ -7,7 +7,8 @@ import { Button, DialogActions, AppDialog, ListItem } from '../ui/touch';
 import { useApp } from '../state/AppContext';
 import { setFlash } from '../state/flash';
 import { CATEGORIES, categoryById, NO_CATEGORY } from '../domain/categories';
-import { formatDate, maskDateInput, maskMoneyInput, parseDateBR, parseMoneyInput } from '../domain/format';
+import { formatDate, maskMoneyInput, parseDateBR, parseMoneyInput } from '../domain/format';
+import { DateField } from '../ui/DateField';
 import { announce, Banner, Screen, useAppTheme } from '../ui/components';
 import { manualFormSnapshot } from '../domain/manualForm';
 
@@ -76,7 +77,7 @@ export default function Lancamento() {
     setValueError(null);
     const dateKey = parseDateBR(date);
     if (!dateKey) {
-      setDateError('Data inválida. Use dd/mm/aaaa.');
+      setDateError('Data inválida. Use dia/mês/ano, como 17/11/2026.');
       return;
     }
     setDateError(null);
@@ -110,8 +111,8 @@ export default function Lancamento() {
           value={kind}
           onValueChange={(v) => setKind(v as 'saida' | 'entrada')}
           buttons={[
-            { value: 'saida', label: 'Saída', icon: 'arrow-up', style: { minHeight: 48 }, labelStyle: { lineHeight: 30 } },
-            { value: 'entrada', label: 'Entrada', icon: 'arrow-down', style: { minHeight: 48 }, labelStyle: { lineHeight: 30 } },
+            { value: 'saida', label: 'Saída', icon: 'arrow-up', showSelectedCheck: true, style: { minHeight: 48 }, labelStyle: { lineHeight: 30 } },
+            { value: 'entrada', label: 'Entrada', icon: 'arrow-down', showSelectedCheck: true, style: { minHeight: 48 }, labelStyle: { lineHeight: 30 } },
           ]}
         />
         <View>
@@ -133,10 +134,9 @@ export default function Lancamento() {
           <TextInput mode="outlined" label="Descrição (opcional)" accessibilityLabel="Descrição (opcional)" value={description} onChangeText={setDescription} maxLength={80} />
           <HelperText type="info">Vazia, vira "Lançamento manual".</HelperText>
         </View>
-        <View>
-          <TextInput mode="outlined" label="Data" accessibilityLabel="Data" value={date} keyboardType="number-pad" placeholder="dd/mm/aaaa" onChangeText={(t) => setDate(maskDateInput(t))} error={Boolean(dateError)} />
-          {dateError && <HelperText type="error" visible>{dateError}</HelperText>}
-        </View>
+        {/* UX 0.22 (UX-119): o mesmo campo de data com calendário da folha "Período". */}
+        <DateField label="Data" value={date} onChange={setDate} error={dateError} calendarLabel="Abrir o calendário da data"
+          onBlur={() => setDateError(!date.trim() || parseDateBR(date) ? null : 'Data inválida. Use dia/mês/ano, como 17/11/2026.')} />
         <ListItem
           title="Categoria"
           description={cat.name}

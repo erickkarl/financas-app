@@ -164,7 +164,13 @@ export function TransactionItem({ tx, onPress, showConnection = false }: { tx: T
   const accountLabel = showConnection && tx.connection_name ? `${tx.account_name} · ${tx.connection_name}` : tx.account_name;
   const future = isFutureTx(tx.date_key);
   // UX 0.14: selo "Fora do Resumo" (ícone + texto); o valor fica em cor neutra.
-  const out = Boolean(tx.out_of_summary);
+  // UX 0.21 (RF-008.11.5): as duas pontas do par de reembolso usam o mesmo selo, com a linha de apoio da outra ponta.
+  const reimb = Boolean(tx.reimb_with);
+  const out = Boolean(tx.out_of_summary) || reimb;
+  const otherDate = tx.reimb_other_date ?? null;
+  const brDate = (k: string) => `${k.slice(8, 10)}/${k.slice(5, 7)}/${k.slice(0, 4)}`;
+  const reimbLine = reimb && otherDate ? (tx.amount > 0 ? `Reembolso da saída de ${brDate(otherDate)}` : `Reembolsada em ${brDate(otherDate)}`) : null;
+  const reimbSpoken = reimb && otherDate ? (tx.amount > 0 ? `reembolso da saída de ${spokenDate(otherDate)} de ${otherDate.slice(0, 4)}, ` : `reembolsada em ${spokenDate(otherDate)} de ${otherDate.slice(0, 4)}, `) : '';
   // UX 0.17 (RF-008.10): estorno de compra no cartão, com selo e valor em cor neutra (não é receita).
   const refund = Boolean(tx.refund);
   const badges = [future ? 'Futura' : null, refund ? 'Estorno' : null, tx.manual ? 'Manual' : null, tx.hidden ? 'Oculta' : null, tx.transfer ? 'Transferência' : null, out ? 'Fora do Resumo' : null].filter(Boolean) as string[];
@@ -173,7 +179,7 @@ export function TransactionItem({ tx, onPress, showConnection = false }: { tx: T
     ? `Futura, ${amountA11y(tx.amount).toLowerCase()}, ${tx.description}, categoria ${cat.name}, ${accountLabel}, prevista para ${spokenDate(tx.date_key)} de ${tx.date_key.slice(0, 4)}`
     : refund
       ? `${out ? 'Fora do Resumo, ' : ''}Estorno de ${balanceA11y(tx.amount)}, ${tx.description}, categoria ${cat.name}, ${accountLabel}, ${spokenDate(tx.date_key)}${rest.length ? `, ${rest.join(', ')}` : ''}`
-      : `${out ? 'Fora do Resumo, ' : ''}${out ? amountA11y(tx.amount).toLowerCase() : amountA11y(tx.amount)}, ${tx.description}, categoria ${cat.name}, ${accountLabel}, ${spokenDate(tx.date_key)}${rest.length ? `, ${rest.join(', ')}` : ''}`;
+      : `${out ? 'Fora do Resumo, ' : ''}${reimbSpoken}${out ? amountA11y(tx.amount).toLowerCase() : amountA11y(tx.amount)}, ${tx.description}, categoria ${cat.name}, ${accountLabel}, ${spokenDate(tx.date_key)}${rest.length ? `, ${rest.join(', ')}` : ''}`;
   return (
     <TouchableRipple onPress={onPress} accessibilityRole="button" accessibilityLabel={label} style={styles.txRow}>
       <View style={[styles.txWrap, stacked && { flexDirection: 'column', alignItems: 'flex-start' }]}>
@@ -183,6 +189,7 @@ export function TransactionItem({ tx, onPress, showConnection = false }: { tx: T
             <Icon source={cat.icon} size={catIcon} color={theme.colors.onSurfaceVariant} />
             <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant, marginLeft: 4, flexShrink: 1 }}>{cat.name} · {accountLabel}</Text>
           </View>
+          {reimbLine && <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>{reimbLine}</Text>}
           {badges.length > 0 && <View style={[styles.row, { gap: 4, marginTop: 4 }]}>{badges.map((b) => <Chip key={b} label={b} icon={b === 'Futura' ? 'calendar-clock' : b === 'Fora do Resumo' ? 'calculator-variant-outline' : b === 'Estorno' ? 'cash-refund' : undefined} />)}</View>}
         </View>
         <Amount value={tx.amount} neutral={future || out || refund} />
@@ -249,7 +256,7 @@ export function OptionRow({ label, description, kind, checked, onPress, disabled
 }
 
 /** Barra de busca: lupa decorativa (fora da árvore de acessibilidade) e "Limpar busca" com 48 dp (REV-24). */
-export function SearchField({ value, onChangeText, placeholder }: { value: string; onChangeText: (v: string) => void; placeholder: string }) {
+export function SearchField({ value, onChangeText, placeholder, right }: { value: string; onChangeText: (v: string) => void; placeholder: string; /** UX 0.22: o botão "Filtros" dentro do campo. */ right?: React.ReactNode }) {
   const theme = useAppTheme();
   return (
     <View style={[styles.row, { backgroundColor: theme.colors.elevation.level3, borderRadius: 28, minHeight: 56, paddingLeft: 16 }]}>
@@ -266,7 +273,8 @@ export function SearchField({ value, onChangeText, placeholder }: { value: strin
         returnKeyType="search"
         style={{ flex: 1, minHeight: 48, marginLeft: 12, color: theme.colors.onSurface, fontSize: 16 }}
       />
-      {value ? <IconButton icon="close" accessibilityLabel="Limpar busca" onPress={() => onChangeText('')} /> : <View style={{ width: 16 }} />}
+      {value ? <IconButton icon="close" accessibilityLabel="Limpar busca" onPress={() => onChangeText('')} /> : <View style={{ width: right ? 4 : 16 }} />}
+      {right}
     </View>
   );
 }

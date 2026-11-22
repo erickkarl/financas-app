@@ -12,7 +12,7 @@ export interface Db {
 }
 
 export const DB_NAME = 'financas.db';
-const DB_VERSION = 10;
+const DB_VERSION = 11;
 
 const MIGRATION_1 = `
 CREATE TABLE IF NOT EXISTS connections (
@@ -180,6 +180,26 @@ export async function migrate(db: Db): Promise<void> {
       );
     `);
   }
+  if (current < 11) {
+    // requisitos v1.29–v1.32 / UX 0.21: reembolso na conta em par com a saída que ele devolveu (RF-008.11).
+    // reimb_with = id da outra ponta (as duas pontas guardam); reimb_at = dia em que o app casou o par;
+    // reimb_notice = 1 enquanto o aviso de mês que mudou (E-20 a) está aberto para o mês deste lançamento;
+    // reimb_first = casado na primeira vez, quando o histórico todo é casado de uma vez (N-19).
+    // reimb_rejected: pares que a pessoa desfez com "Não é reembolso"; nenhum dos dois casa sozinho de novo (N-18).
+    // Nada do nome da outra ponta é guardado (RNF-007; Q51 b: o casamento é só pelo documento).
+    await db.execAsync(`
+      ALTER TABLE transactions ADD COLUMN reimb_with TEXT;
+      ALTER TABLE transactions ADD COLUMN reimb_at TEXT;
+      ALTER TABLE transactions ADD COLUMN reimb_notice INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE transactions ADD COLUMN reimb_first INTEGER NOT NULL DEFAULT 0;
+      CREATE TABLE IF NOT EXISTS reimb_rejected (
+        credit_id TEXT NOT NULL,
+        debit_id TEXT NOT NULL,
+        rejected_at TEXT NOT NULL,
+        PRIMARY KEY (credit_id, debit_id)
+      );
+    `);
+  }
   await db.execAsync(`PRAGMA user_version = ${DB_VERSION}`);
 }
 
@@ -192,6 +212,7 @@ export async function wipeAll(db: Db): Promise<void> {
     await db.runAsync('DELETE FROM investments');
     await db.runAsync('DELETE FROM wealth_points');
     await db.runAsync('DELETE FROM recipient_categories');
+    await db.runAsync('DELETE FROM reimb_rejected');
     await db.runAsync('DELETE FROM app_state');
   });
 }

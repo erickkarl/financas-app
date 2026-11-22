@@ -92,7 +92,7 @@ describe('UX 0.14 com sincronização', () => {
     await repo.setOutOfSummary('das', true); // RF-008.7: a pessoa marca
     s = await repo.monthSummary('2026-11', '2026-11-19');
     expect(s.despesas).toBe(120 + 90 + 200 + 40);
-    expect(s.outOfSummary).toEqual({ saidas: 70, entradas: 0, count: 1 });
+    expect(s.outOfSummary).toEqual({ saidas: 70, entradas: 0, count: 1, reimbursements: 0 });
   });
   test('UX-087/088 e N-1/N-2: fora das somas num motivo só; Resumo e Extrato batem; entradas à parte', async () => {
     const { repo } = await setup();
@@ -103,18 +103,18 @@ describe('UX 0.14 com sincronização', () => {
     await repo.setOutOfSummary('outro', true); // oculta vence
     const ex = await repo.sums({ from: '2026-11-01', to: '2026-11-30', today: '2026-11-19' });
     // UX 0.16 (E-11 a): a oculta conta em "Fora das somas" mesmo sem "Mostrar ocultas"; a lista ({n}) não a inclui.
-    expect(ex.byReason).toEqual({ hidden: 1, future: 0, transfer: 3, investments: 0, out: 2 });
+    expect(ex.byReason).toEqual({ hidden: 1, future: 0, transfer: 3, investments: 0, out: 2, reimb: 0, manualOut: 2 });
     const exAll = await repo.sums({ from: '2026-11-01', to: '2026-11-30', today: '2026-11-19', showHidden: true });
-    expect(exAll.byReason).toEqual({ hidden: 1, future: 0, transfer: 3, investments: 0, out: 2 });
+    expect(exAll.byReason).toEqual({ hidden: 1, future: 0, transfer: 3, investments: 0, out: 2, reimb: 0, manualOut: 2 });
     const s = await repo.monthSummary('2026-11', '2026-11-19');
     expect([ex.entradas, -ex.saidas]).toEqual([s.receitas, s.despesas]); // RF-008.1
-    expect(s.outOfSummary).toEqual({ saidas: 70, entradas: 5000, count: 2 });
+    expect(s.outOfSummary).toEqual({ saidas: 70, entradas: 5000, count: 2, reimbursements: 0 });
     const only = await repo.sums({ from: '2026-11-01', to: '2026-11-30', today: '2026-11-19', only: 'out' });
     expect(only.count).toBe(3); // 'das', 'sal' e 'mesmo' (marcados, sem as ocultas)
     // UX 0.16 (C2-07): no Extrato filtrado, a contagem e a soma dos marcados são as mesmas da linha do Resumo.
-    expect(only.out).toEqual(s.outOfSummary);
+    expect({ ...only.out, reimbursements: 0 }).toEqual(s.outOfSummary);
     const onlyAll = await repo.sums({ from: '2026-11-01', to: '2026-11-30', today: '2026-11-19', only: 'out', showHidden: true });
-    expect(onlyAll.out).toEqual(s.outOfSummary); // a oculta marcada conta como oculta, não como fora do Resumo (N-1)
+    expect({ ...onlyAll.out, reimbursements: 0 }).toEqual(s.outOfSummary); // a oculta marcada conta como oculta, não como fora do Resumo (N-1)
     // N-3: a marca não desfaz par de transferência
     expect((await repo.getTransaction('mesmo'))?.transfer).toBe(1);
   });

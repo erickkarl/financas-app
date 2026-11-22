@@ -4,7 +4,7 @@
 import { router } from 'expo-router';
 import type { RecipientKey } from '../domain/recipient';
 
-export type ExtratoParams = { account?: string; from?: string; to?: string; category?: string; only?: 'out' | 'bill'; futuras?: '1'; recipient?: RecipientKey };
+export type ExtratoParams = { account?: string; from?: string; to?: string; category?: string; only?: 'out' | 'bill' | 'reimb'; futuras?: '1'; recipient?: RecipientKey };
 
 // O documento do destinatário não vai na rota (RNF-007): a rota leva só um marcador, e o documento fica em memória.
 const recipients = new Map<string, RecipientKey>();

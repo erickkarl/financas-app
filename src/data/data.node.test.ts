@@ -311,6 +311,6 @@ describe('UX v0.4 §7.4 nome da conexão', () => {
   test('migração da versão 1 numera as conexões existentes', async () => {
     const db = createNodeDb();
     await migrate(db);
-    expect((await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version'))?.user_version).toBe(10);
+    expect((await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version'))?.user_version).toBe(11);
   });
 });

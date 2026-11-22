@@ -20,9 +20,9 @@ import { Banner, NoCredentialsHelp, SectionTitle, Screen, useAppTheme } from '..
 const STORED = [
   'Seus códigos do Pluggy (Client ID e Client Secret), em armazenamento protegido do aparelho.',
   'Contas, saldos, cartões e transações trazidos das suas conexões.',
-  'As categorias que você mudou, as transações que ocultou e as que marcou como transferência ou como fora do Resumo.',
+  'As categorias que você mudou, as transações que ocultou, as que marcou como transferência ou como fora do Resumo e os reembolsos que você disse que não são reembolso.',
   // UX 0.14 / RNF-007
-  'O número do CPF ou do CNPJ de quem pagou e de quem recebeu cada transação, quando o banco informa. O app usa isso para reconhecer transferências entre as suas contas.',
+  'O número do CPF ou do CNPJ de quem pagou e de quem recebeu cada transação, quando o banco informa. O app usa isso para reconhecer transferências entre as suas contas e reembolsos.',
   // UX 0.7 (RF-016)
   'O valor dos seus investimentos por instituição e o histórico diário do seu patrimônio.',
   // UX 0.17 (RF-006.3, RNF-007).

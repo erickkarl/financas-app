@@ -2,13 +2,14 @@
 // Gasto, Receita e Economia de cada mês vêm de monthSummary, a mesma função de T-18 (RF-017.5).
 // "Saldo em contas" (ux.md 0.20; requisitos v1.28): real desde a conexão, estimado antes (RF-017.7, .8, .8.1), com o
 // rendimento do mês só como informação (RF-017.12).
-import React, { useCallback, useMemo, useState } from 'react';
-import { RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { RefreshControl, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
-import { Divider, Icon, List, Text, TouchableRipple } from 'react-native-paper';
+import { Divider, Icon, List, Menu, Text, TouchableRipple } from 'react-native-paper';
 import { useApp } from '../../../state/AppContext';
 import { useStartConnect } from '../../../state/hooks';
-import { balanceA11y, formatBalance, formatMonth, formatSignedAmount, isMaskingValues, setMaskValues, spDateKey } from '../../../domain/format';
+import { balanceA11y, formatBalance, formatCount, formatMonth, formatSignedAmount, isMaskingValues, setMaskValues, spDateKey, spokenDate } from '../../../domain/format';
+import { openExtrato } from '../../../state/nav';
 import { applyPeriod, CRITERIOS, monthsBetween, shiftMonth, partialFirstMonth, patrimonioByMonth, type Criterio, type Periodo } from '../../../domain/monthly';
 import type { SaldoHistory } from '../../../domain/saldoHistory';
 import { Amount, Banner, EmptyState, Skeleton, styles as ui, useAppTheme } from '../../../ui/components';
@@ -25,6 +26,8 @@ type Data = {
   saldo: number;
   saldoH: SaldoHistory;
   empty: boolean;
+  /** UX 0.21 (E-20 a, N-19): aviso dos meses que mudaram por reembolso, e o aviso único da primeira vez. */
+  reimb: { first: { pairs: number; months: number } | null; months: { month: string; date: string }[] };
 };
 
 const monthName = (m: string) => formatMonth(Number(m.slice(0, 4)), Number(m.slice(5, 7)));
@@ -36,8 +39,9 @@ export default function ResumoPorMes() {
   const theme = useAppTheme();
   const { mascarar, preview } = useLocalSearchParams<{ mascarar?: string; preview?: string }>();
   if (__DEV__ && mascarar === '1' && !isMaskingValues()) setMaskValues(true);
-  const { repo, dataVersion, refreshAll } = useApp();
+  const { repo, dataVersion, refreshAll, bump } = useApp();
   const startConnect = useStartConnect();
+  const { fontScale } = useWindowDimensions();
   const today = spDateKey(new Date());
   const current = today.slice(0, 7);
   const [criterio, setCriterio] = useState<Criterio>('gasto');
@@ -50,9 +54,9 @@ export default function ResumoPorMes() {
   const load = useCallback(async () => {
     setError(false);
     try {
-      const [ov, series, total, conns, saldoH] = await Promise.all([repo.monthlyOverview(today), repo.wealthSeries(), repo.totalBalance(), repo.countConnections(), repo.saldoHistory(today)]);
+      const [ov, series, total, conns, saldoH, reimb] = await Promise.all([repo.monthlyOverview(today), repo.wealthSeries(), repo.totalBalance(), repo.countConnections(), repo.saldoHistory(today), repo.refundNotices()]);
       const wealth = patrimonioByMonth(series.map((p) => ({ date: p.date, total: p.total })));
-      const real: Data = { first: ov.firstDate, flows: ov.rows, wealth, wealthFirst: series[0]?.date ?? null, saldo: total.total, saldoH, empty: conns === 0 && ov.rows.length === 0 && !total.hasManual };
+      const real: Data = { first: ov.firstDate, flows: ov.rows, wealth, wealthFirst: series[0]?.date ?? null, saldo: total.total, saldoH, empty: conns === 0 && ov.rows.length === 0 && !total.hasManual, reimb };
       // Capturas de evidência (só em desenvolvimento) dos estados que os dados reais não produzem:
       // ?preview=vazio (sem conexão e sem lançamentos), sem-dados ("Sem dados neste período."), muitos-meses (dados de exemplo).
       if (__DEV__ && preview === 'vazio') setData({ ...real, empty: true });
@@ -67,6 +71,9 @@ export default function ResumoPorMes() {
         const ex = [{ yieldReal: 12.34, yieldEst: 0 }, { yieldReal: 0, yieldEst: 45.67 }, { yieldReal: -8.9, yieldEst: 0 }];
         ex.forEach((y, k) => { const i = ms.length - 1 - k; if (i >= 0) ms[i] = { ...ms[i], ...y }; });
         setData({ ...real, saldoH: { ...real.saldoH, months: ms } });
+      } else if (__DEV__ && preview === 'reembolso-mes') {
+        // Evidência: o aviso de um reembolso que chegou depois e mudou um mês fechado (nos dados reais, só a primeira vez).
+        setData({ ...real, reimb: { first: null, months: [{ month: shiftMonth(current, -1), date: today }] } });
       } else setData(real);
     } catch {
       setError(true);
@@ -136,27 +143,23 @@ export default function ResumoPorMes() {
 
   return (
     <SafeAreaView edges={['left', 'right']} style={{ flex: 1 }}>
+    {/* 1. Critérios em abas (0.22), presas logo abaixo da barra; a linha rola quando as cinco não cabem. */}
+    <TabsRow value={criterio} onChange={(c) => { setCriterio(c); setSel(null); }} />
     <ScrollView contentContainerStyle={ui.scroll} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
-      <View style={[ui.inner, { gap: 12 }]}>
-        {/* 1. Critério (RF-017.1): escolha única, quebra linha, alvos de 48 dp. */}
-        <View style={s.wrap} accessibilityRole="radiogroup" accessibilityLabel="Critério">
-          {CRITERIOS.map((c) => (
-            <Button key={c.id} mode={criterio === c.id ? 'contained-tonal' : 'outlined'} icon={criterio === c.id ? 'check' : undefined}
-              onPress={() => { setCriterio(c.id); setSel(null); }} accessibilityRole="radio" accessibilityState={{ checked: criterio === c.id }} contentStyle={s.seg}>
-              {c.label}
-            </Button>
-          ))}
-        </View>
-        {/* 2. Período (RF-017.2). Em "Saldo em contas" antes do portão, desabilitado com o motivo. */}
-        <View style={s.wrap} accessibilityRole="radiogroup" accessibilityLabel="Período">
-          {([[6, '6 meses'], [12, '12 meses'], ['tudo', 'Tudo']] as [Periodo, string][]).map(([v, label]) => (
-            <Button key={String(v)} mode={periodo === v && !saldoFirstState ? 'contained-tonal' : 'outlined'} icon={periodo === v && !saldoFirstState ? 'check' : undefined}
-              disabled={saldoFirstState}
-              accessibilityHint={saldoFirstState ? 'Indisponível em Saldo em contas: por enquanto o app mostra só o saldo de hoje.' : undefined}
-              onPress={() => { setPeriodo(v); setSel(null); }} accessibilityRole="radio" accessibilityState={{ checked: periodo === v, disabled: saldoFirstState }} contentStyle={s.seg}>
-              {label}
-            </Button>
-          ))}
+      {/* C4-06: respiro de 12 dp entre a linha das abas e a do título. */}
+      <View style={[ui.inner, { gap: 12, paddingTop: 12 }]}>
+        {/* 2. Título curto, subtítulo com o período e o botão do período com menu (0.22). */}
+        <View style={fontScale >= 1.5 ? { gap: 8, alignItems: 'flex-start' } : { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+          {/* Com fonte grande, o título fica na largura toda e o botão do período desce, à esquerda (0.22). */}
+          <View style={{ flexGrow: 1, flexShrink: 1, flexBasis: fontScale >= 1.5 ? 'auto' : 180, alignSelf: 'stretch' }}>
+            <Text variant="titleMedium" accessibilityRole="header">{criterio === 'economia' ? 'Economia por mês' : crit.titulo}</Text>
+            {rows.length > 0 && (
+              <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
+                {`${criterio === 'economia' ? 'receita − gasto · ' : ''}${shortMonth(rows[0].month)}${rows.length > 1 ? ` a ${shortMonth(rows[rows.length - 1].month)}` : ''}`}
+              </Text>
+            )}
+          </View>
+          <PeriodMenu value={periodo} onChange={(v) => { setPeriodo(v); setSel(null); }} />
         </View>
 
         {data === null ? (
@@ -165,14 +168,16 @@ export default function ResumoPorMes() {
           <Text variant="bodyLarge">Sem dados neste período.</Text>
         ) : (
           <>
-            {/* 3. Título e 4. leitura do mês selecionado */}
-            <Text variant="titleMedium" accessibilityRole="header">
-              {`${crit.titulo}, ${rows.length === 1 ? `em ${monthName(rows[0].month)}` : `de ${monthName(rows[0].month)} a ${monthName(rows[rows.length - 1].month)}`}`}
-            </Text>
+            {/* 3. Leitura do mês em destaque, em três linhas (0.22), lidas juntas com a frase de antes. */}
             {selected && (
-              <Text variant="bodyLarge" style={ui.tabular} accessibilityLiveRegion="polite">
-                {`${monthName(selected.month)}${selected.current ? ', em andamento' : ''}${selected.estimated ? ', estimado' : criterio === 'saldo' ? ', real' : ''}: ${valueText(selected.value)}${untilToday(selected)}`}
-              </Text>
+              <View accessible accessibilityLiveRegion="polite"
+                accessibilityLabel={`${monthName(selected.month)}${selected.current ? ', em andamento' : ''}${selected.estimated ? ', estimado' : criterio === 'saldo' ? ', real' : ''}: ${criterio === 'gasto' ? `menos ${balanceA11y(selected.value)}` : spokenValue(selected.value)}${untilToday(selected)}`}>
+                <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant }}>
+                  {`${monthName(selected.month)}${selected.current ? ' · em andamento' : ''}${selected.estimated ? ' · estimado' : criterio === 'saldo' ? ' · real' : ''}`}
+                </Text>
+                <Text variant="headlineMedium" style={ui.tabular} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>{valueText(selected.value)}</Text>
+                {untilToday(selected) !== '' && <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>até hoje</Text>}
+              </View>
             )}
             {rows.length === 1 && !saldoFirstState && <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant }}>Ainda não há variação para mostrar.</Text>}
             {/* 5. Gráfico */}
@@ -207,6 +212,18 @@ export default function ResumoPorMes() {
             {criterio === 'patrimonio' && data.wealthFirst && (
               <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>{`Histórico a partir de ${br(data.wealthFirst)}. O app guarda o patrimônio desde que você conectou.`}</Text>
             )}
+            {/* UX 0.21 (E-20 a, N-19): reembolsos mudaram meses já fechados; só em Gasto, Receita e Economia. */}
+            {flow && data.reimb.first ? (
+              <Banner tone="info" icon="information-outline"
+                text={`O app passou a reconhecer reembolsos na conta. ${formatCount(data.reimb.first.pairs)} ${data.reimb.first.pairs === 1 ? 'reembolso e a saída que ele devolveu ficaram' : 'reembolsos e as saídas que eles devolveram ficaram'} fora do Resumo, e ${formatCount(data.reimb.first.months)} ${data.reimb.first.months === 1 ? 'mês mudou' : 'meses mudaram'}.`}
+                actionLabel="Ver quais" onAction={() => openExtrato({ only: 'reimb' })}
+                secondaryLabel="Fechar" onSecondary={async () => { await repo.dismissRefundNotices(); bump(); load(); }} />
+            ) : flow && data.reimb.months.length > 0 ? (
+              <Banner tone="info" icon="information-outline"
+                text={data.reimb.months.length === 1 ? `Um reembolso mudou o resumo de ${monthName(data.reimb.months[0].month)}.` : `Reembolsos mudaram o resumo de ${formatCount(data.reimb.months.length)} meses já fechados.`}
+                actionLabel="Ver quais" onAction={() => openExtrato({ only: 'reimb' })}
+                secondaryLabel="Fechar" onSecondary={async () => { await repo.dismissRefundNotices(); bump(); load(); }} />
+            ) : null}
             {/* Saldo em contas (ux.md 0.20): aviso fixo, "Taxa ainda pouco medida" e "Como o app estima". Sem margem de erro. */}
             {criterio === 'saldo' && saldoH && (allRows.some((r) => r.estimated) ? (
               <Banner tone="info" icon="information-outline" text={`Os meses antes de ${estimatedBefore} são estimados. O valor pode ser diferente do que o banco mostrava.`} />
@@ -246,7 +263,9 @@ export default function ResumoPorMes() {
                 const yOrigin = !r.yieldEst ? 'real' : !r.yieldReal ? 'estimado'
                   : `${formatBalance(r.yieldReal ?? 0)} real e ${formatBalance(r.yieldEst)} estimado${r.current && saldoH?.connectedSince ? ` (antes de ${br(saldoH.connectedSince)})` : ''}`;
                 const yieldLine = criterio === 'saldo' ? `${r.current ? 'Rendimento até hoje' : 'Rendimento do mês'}: ${formatSignedAmount(yTotal)} · ${yOrigin}` : null;
-                const label = `${monthName(r.month)}${r.current ? ', em andamento' : ''}${r.since ? `, parcial desde ${br(r.since)}` : ''}${r.estimated ? ', estimado' : criterio === 'saldo' ? ', real' : ''}, ${SPOKEN[criterio]} de ${spokenValue(r.value)}${untilToday(r)}.${yieldLine ? ` ${yieldLine}.` : ''} Abre o resumo do mês.`;
+                // UX 0.21: mês que mudou por reembolso, até o aviso ser fechado (só Gasto, Receita e Economia).
+                const changed = flow ? data.reimb.months.find((x) => x.month === r.month) : undefined;
+                const label = `${monthName(r.month)}${changed ? `, mudou por reembolso em ${spokenDate(changed.date)} de ${changed.date.slice(0, 4)}` : ''}${r.current ? ', em andamento' : ''}${r.since ? `, parcial desde ${br(r.since)}` : ''}${r.estimated ? ', estimado' : criterio === 'saldo' ? ', real' : ''}, ${SPOKEN[criterio]} de ${spokenValue(r.value)}${untilToday(r)}.${yieldLine ? ` ${yieldLine}.` : ''} Abre o resumo do mês.`;
                 return (
                   <View key={r.month}>
                     <TouchableRipple onPress={() => router.push({ pathname: '/resumo/mes', params: { mes: r.month } })} accessibilityRole="button" accessibilityLabel={label} style={s.row}>
@@ -260,6 +279,12 @@ export default function ResumoPorMes() {
                             </View>
                           )}
                           {yieldLine && <Text variant="bodySmall" style={[ui.tabular, { color: theme.colors.onSurfaceVariant }]}>{yieldLine}</Text>}
+                          {changed && (
+                            <View style={[ui.row, { gap: 4 }]}>
+                              <Icon source="cash-refund" size={16} color={theme.colors.onSurfaceVariant} />
+                              <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant, flexShrink: 1 }}>{`Mudou por reembolso em ${br(changed.date)}`}</Text>
+                            </View>
+                          )}
                         </View>
                         {criterio === 'gasto' ? <Amount value={-r.value} variant="bodyLarge" neutral />
                           : criterio === 'receita' ? <Amount value={r.value} variant="bodyLarge" />
@@ -293,3 +318,54 @@ const s = StyleSheet.create({
   row: { minHeight: 64, justifyContent: 'center', paddingVertical: 8 },
   swatch: { width: 14, height: 14, borderWidth: 2 },
 });
+
+const ABBR = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+/** "dez/2025" (0.22: subtítulo com o período abreviado). */
+function shortMonth(m: string): string { return `${ABBR[Number(m.slice(5, 7)) - 1]}/${m.slice(0, 4)}`; }
+
+/** 0.22 (UX-120): critérios em abas numa linha que rola; a aba escolhida rola até ficar inteira à vista. */
+function TabsRow({ value, onChange }: { value: Criterio; onChange: (c: Criterio) => void }) {
+  const theme = useAppTheme();
+  const ref = useRef<{ scrollTo: (o: { x: number; animated?: boolean }) => void } | null>(null);
+  const pos = useRef<Record<string, { x: number; w: number }>>({});
+  const [vw, setVw] = useState(0);
+  const { width } = useWindowDimensions();
+  // Deitado, as abas começam na coluna de 640 dp.
+  const inset = Math.max(0, (width - 640) / 2);
+  useEffect(() => {
+    const p = pos.current[value];
+    if (!p || !vw) return;
+    ref.current?.scrollTo({ x: Math.max(0, p.x - (vw - p.w) / 2), animated: true });
+  }, [value, vw]);
+  return (
+    <View style={{ backgroundColor: theme.colors.surface, borderBottomWidth: 1, borderColor: theme.colors.outlineVariant }} onLayout={(e) => setVw(e.nativeEvent.layout.width)}>
+      <ScrollView ref={ref as never} horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 8 + inset }} accessibilityRole="tablist">
+        {CRITERIOS.map((c, i) => {
+          const active = c.id === value;
+          return (
+            <TouchableRipple key={c.id} onPress={() => onChange(c.id)}
+              onLayout={(e) => { pos.current[c.id] = { x: e.nativeEvent.layout.x, w: e.nativeEvent.layout.width }; }}
+              accessibilityRole="tab" accessibilityState={{ selected: active }} accessibilityLabel={`${c.label}, ${i + 1} de ${CRITERIOS.length}`}
+              style={{ minHeight: 48, justifyContent: 'center', paddingHorizontal: 16, borderBottomWidth: 3, borderColor: active ? theme.colors.primary : 'transparent' }}>
+              <Text variant="titleSmall" numberOfLines={1} style={{ color: active ? theme.colors.primary : theme.colors.onSurfaceVariant, fontWeight: active ? '700' : '500' }}>{c.label}</Text>
+            </TouchableRipple>
+          );
+        })}
+      </ScrollView>
+    </View>
+  );
+}
+
+/** 0.22 (UX-120): período num botão contornado com menu de três opções. */
+function PeriodMenu({ value, onChange }: { value: Periodo; onChange: (v: Periodo) => void }) {
+  const [open, setOpen] = useState(false);
+  const label = value === 'tudo' ? 'Tudo' : `${value} meses`;
+  return (
+    <Menu visible={open} onDismiss={() => setOpen(false)} anchorPosition="bottom"
+      anchor={<Button mode="outlined" icon="menu-down" onPress={() => setOpen(true)} accessibilityLabel={`Período: ${label}`} accessibilityHint="Abre as opções">{label}</Button>}>
+      {([[6, '6 meses'], [12, '12 meses'], ['tudo', 'Tudo']] as [Periodo, string][]).map(([v, l]) => (
+        <Menu.Item key={String(v)} title={l} leadingIcon={v === value ? 'check' : undefined} onPress={() => { onChange(v); setOpen(false); }} style={{ minHeight: 48 }} />
+      ))}
+    </Menu>
+  );
+}

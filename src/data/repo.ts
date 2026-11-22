@@ -7,6 +7,7 @@ import { detectTransfers } from '../domain/transfers';
 import { isBillPayment, ownTransferSignal } from '../domain/recognition';
 import { monthsBetween } from '../domain/monthly';
 import { buildSaldoHistory, type SaldoConn, type SaldoHistory, type SaldoPoint } from '../domain/saldoHistory';
+import { matchRefunds, type RefundCandidate, type RefundPair } from '../domain/refunds';
 import { isCardRefund, RECIPIENT_DOC_SQL, RECIPIENT_TYPE_SQL, recipientKey, type RecipientKey } from '../domain/recipient';
 
 export type ConnectionRow = {
@@ -79,6 +80,9 @@ export type TransactionRow = {
   refund?: number;
   /** RF-006.3: 1 quando a categoria efetiva veio da lembrança do destinatário. */
   remembered?: number;
+  /** RF-008.11: id da outra ponta do par de reembolso, e a data dela (para a linha de apoio do Extrato). */
+  reimb_with?: string | null;
+  reimb_other_date?: string | null;
   account_name: string;
   account_type: string | null;
   account_subtype?: string | null;
@@ -96,6 +100,10 @@ const CONN_COLS = `c.*, ${CONN_NAME('c')} AS name, ${CONN_REAL('c')} AS has_real
 // RF-006.3: a escolha da pessoa no lançamento > a lembrança do destinatário > a sugestão automática (mapa, R-8.5, MCC).
 const EFFECTIVE_CATEGORY = `CASE WHEN t.user_category_set = 1 THEN t.user_category ELSE COALESCE(t.remembered_category, t.auto_category) END`;
 const EFFECTIVE_TRANSFER = `COALESCE(t.transfer_override, t.transfer_auto)`;
+// RF-008.11.5 (UX 0.21): o par de reembolso sai do Resumo como "Fora do Resumo", com o motivo "reembolso".
+const IN_REIMB = `t.reimb_with IS NOT NULL`;
+const OUT_EFF = `(t.out_of_summary = 1 OR t.reimb_with IS NOT NULL)`;
+
 
 export type TxFilter = {
   accountIds?: string[];
@@ -110,9 +118,11 @@ export type TxFilter = {
   /** Hoje em São Paulo, AAAA-MM-DD (futura = date_key > today). */
   today?: string;
   /** UX 0.14: "Só fora do Resumo" (T-14) e os motivos da folha "Ver quais" (T-13). */
-  only?: 'out' | 'transfer' | 'bill';
+  only?: 'out' | 'transfer' | 'bill' | 'reimb' | 'manualOut';
   /** UX 0.17 (T-22 "Ver lançamentos"): só os lançamentos de um destinatário (PIX ou boleto em conta). */
   recipient?: RecipientKey;
+  /** UX 0.22 (RF-005.5, RF-005.6): "Tipo" pelo sinal do lançamento. */
+  type?: 'in' | 'out';
 };
 
 function whereFor(filter: TxFilter): { sql: string; params: SqlValue[] } {
@@ -146,7 +156,10 @@ function whereFor(filter: TxFilter): { sql: string; params: SqlValue[] } {
     params.push(`%${q.replace(/[\\%_]/g, (m) => `\\${m}`)}%`);
   }
   if (!filter.showHidden) parts.push('t.hidden = 0');
-  if (filter.only === 'out') parts.push('t.out_of_summary = 1');
+  if (filter.only === 'out') parts.push(OUT_EFF);
+  // UX 0.21: os dois motivos de "Fora do Resumo" na folha "Ver quais".
+  if (filter.only === 'reimb') parts.push(IN_REIMB);
+  if (filter.only === 'manualOut') parts.push(`t.out_of_summary = 1 AND t.reimb_with IS NULL`);
   if (filter.only === 'transfer') parts.push(`${EFFECTIVE_TRANSFER} = 1`);
   // R-2.1: pagamentos de fatura sem par e ainda não marcados à mão.
   if (filter.only === 'bill') parts.push('t.bill_unpaired = 1 AND t.transfer_override IS NULL');
@@ -155,6 +168,8 @@ function whereFor(filter: TxFilter): { sql: string; params: SqlValue[] } {
       AND ((t.amount < 0 AND t.receiver_doc_type = ? AND t.receiver_doc = ?) OR (t.amount >= 0 AND t.payer_doc_type = ? AND t.payer_doc = ?))`);
     params.push(filter.recipient.type, filter.recipient.doc, filter.recipient.type, filter.recipient.doc);
   }
+  if (filter.type === 'in') parts.push('t.amount > 0');
+  if (filter.type === 'out') parts.push('t.amount < 0');
   if (filter.future && filter.today) {
     parts.push(filter.future === 'only' ? 't.date_key > ?' : 't.date_key <= ?');
     params.push(filter.today);
@@ -461,9 +476,10 @@ export function createRepo(db: Db) {
       const t0 = today.replace(/[^0-9-]/g, '');
       const base = `t.date_key BETWEEN ? AND ? AND t.hidden = 0 AND ${EFFECTIVE_TRANSFER} = 0 AND t.date_key <= '${t0}'`;
       // RF-008.8: "Fora do Resumo" sai das receitas e despesas (e da lista por categoria).
-      const notInv = `COALESCE(${EFFECTIVE_CATEGORY}, '') <> 'investimentos' AND t.out_of_summary = 0`;
+      // RF-008.11.5: o par de reembolso também sai (as duas pontas, em cada mês).
+      const notInv = `COALESCE(${EFFECTIVE_CATEGORY}, '') <> 'investimentos' AND NOT ${OUT_EFF}`;
       const isInv = `COALESCE(${EFFECTIVE_CATEGORY}, '') = 'investimentos'`;
-      const totals = await db.getFirstAsync<{ rec: number | null; desp: number | null; rfN: number | null; rfV: number | null; rend: number | null; apl: number | null; res: number | null; outS: number | null; outE: number | null; outN: number | null; n: number }>(
+      const totals = await db.getFirstAsync<{ rec: number | null; desp: number | null; rfN: number | null; rfV: number | null; rend: number | null; apl: number | null; res: number | null; outS: number | null; outE: number | null; outN: number | null; reimbN: number | null; n: number }>(
         `SELECT
            -- RF-008.10: estorno no cartão não é receita; reduz as despesas (o líquido).
            SUM(CASE WHEN ${notInv} AND t.amount > 0 AND t.refund = 0 THEN t.amount END) AS rec,
@@ -474,9 +490,11 @@ export function createRepo(db: Db) {
            SUM(CASE WHEN ${isInv} AND t.amount < 0 THEN -t.amount END) AS apl,
            SUM(CASE WHEN ${isInv} AND t.amount > 0 THEN t.amount END) AS res,
            -- RF-008.8.1/.2 (N-1, N-2): só o que cai em "fora do Resumo" (não oculta, não futura, não transferência, não investimento)
-           SUM(CASE WHEN NOT ${isInv} AND t.out_of_summary = 1 AND t.amount < 0 THEN -t.amount END) AS outS,
-           SUM(CASE WHEN NOT ${isInv} AND t.out_of_summary = 1 AND t.amount > 0 THEN t.amount END) AS outE,
-           SUM(CASE WHEN NOT ${isInv} AND t.out_of_summary = 1 THEN 1 ELSE 0 END) AS outN,
+           SUM(CASE WHEN NOT ${isInv} AND ${OUT_EFF} AND t.amount < 0 THEN -t.amount END) AS outS,
+           SUM(CASE WHEN NOT ${isInv} AND ${OUT_EFF} AND t.amount > 0 THEN t.amount END) AS outE,
+           SUM(CASE WHEN NOT ${isInv} AND ${OUT_EFF} THEN 1 ELSE 0 END) AS outN,
+           -- RF-008.11.14 (N-17): reembolso vem antes de "marcado à mão"
+           SUM(CASE WHEN NOT ${isInv} AND ${IN_REIMB} THEN 1 ELSE 0 END) AS reimbN,
            COUNT(*) AS n
          FROM transactions t WHERE ${base}`,
         [from, to],
@@ -514,7 +532,7 @@ export function createRepo(db: Db) {
       return {
         receitas, despesas, resultado: r2(receitas - despesas), rendimentos: r2(totals?.rend),
         aplicado: r2(totals?.apl), resgatado: r2(totals?.res),
-        outOfSummary: { saidas: r2(totals?.outS), entradas: r2(totals?.outE), count: totals?.outN ?? 0 },
+        outOfSummary: { saidas: r2(totals?.outS), entradas: r2(totals?.outE), count: totals?.outN ?? 0, reimbursements: totals?.reimbN ?? 0 },
         byCategory: cats.map((c) => ({ category: c.category, total: r2(c.total), refunds: { count: c.rfN ?? 0, total: r2(c.rfV) } })),
         refunds: { count: totals?.rfN ?? 0, total: r2(totals?.rfV) },
         futureCount: fut?.n ?? 0, movementCount: any?.n ?? 0,
@@ -557,6 +575,7 @@ export function createRepo(db: Db) {
         `SELECT t.id, t.account_id, t.date, t.date_key, t.description, t.amount,
                 ${EFFECTIVE_CATEGORY} AS category, t.hidden, t.manual,
                 ${EFFECTIVE_TRANSFER} AS transfer, t.transfer_auto, t.out_of_summary, t.refund,
+                t.reimb_with, (SELECT o.date_key FROM transactions o WHERE o.id = t.reimb_with) AS reimb_other_date,
                 CASE WHEN t.user_category_set = 0 AND t.remembered_category IS NOT NULL THEN 1 ELSE 0 END AS remembered,
                 COALESCE(a.name, 'Dinheiro') AS account_name, a.type AS account_type, a.subtype AS account_subtype, c.institution_name,
                 CASE WHEN c.item_id IS NULL THEN NULL ELSE ${CONN_NAME('c')} END AS connection_name
@@ -574,6 +593,7 @@ export function createRepo(db: Db) {
         `SELECT t.id, t.account_id, t.date, t.date_key, t.description, t.amount,
                 ${EFFECTIVE_CATEGORY} AS category, t.hidden, t.manual,
                 ${EFFECTIVE_TRANSFER} AS transfer, t.transfer_auto, t.out_of_summary, t.refund,
+                t.reimb_with, (SELECT o.date_key FROM transactions o WHERE o.id = t.reimb_with) AS reimb_other_date,
                 CASE WHEN t.user_category_set = 0 AND t.remembered_category IS NOT NULL THEN 1 ELSE 0 END AS remembered,
                 COALESCE(a.name, 'Dinheiro') AS account_name, a.type AS account_type, a.subtype AS account_subtype, c.institution_name,
                 CASE WHEN c.item_id IS NULL THEN NULL ELSE ${CONN_NAME('c')} END AS connection_name
@@ -583,7 +603,7 @@ export function createRepo(db: Db) {
       );
     },
     /** Linha de resultado do extrato (T-13): contagem e somas do que está filtrado. */
-    async sums(filter: TxFilter): Promise<{ count: number; entradas: number; saidas: number; refunds: number; excluded: number; byReason: ExclusionCounts; out: { count: number; saidas: number; entradas: number } }> {
+    async sums(filter: TxFilter): Promise<{ count: number; entradas: number; saidas: number; refunds: number; excluded: number; byReason: ExclusionCounts; out: { count: number; saidas: number; entradas: number }; refundsNotIncluded: number }> {
       // UX 0.16 (E-11 a): as ocultas contam sempre em "Fora das somas", mesmo com "Mostrar ocultas" desligado.
       // Por isso a consulta inclui as ocultas e o total da lista ({n} transações) só as conta quando estão à mostra.
       const w = whereFor({ ...filter, showHidden: true });
@@ -594,24 +614,49 @@ export function createRepo(db: Db) {
       const today = (filter.today ?? '9999-12-31').replace(/[^0-9-]/g, '');
       const reason = `CASE WHEN t.hidden = 1 THEN 'hidden' WHEN t.date_key > '${today}' THEN 'future'
         WHEN ${EFFECTIVE_TRANSFER} = 1 THEN 'transfer' WHEN COALESCE(${EFFECTIVE_CATEGORY}, '') = 'investimentos' THEN 'investments'
-        WHEN t.out_of_summary = 1 THEN 'out' ELSE NULL END`;
-      const r = await db.getFirstAsync<{ n: number; e: number | null; s: number | null; rf: number | null; h: number; f: number; tr: number; i: number; o: number; oS: number | null; oE: number | null }>(
+        WHEN ${IN_REIMB} THEN 'reimb' WHEN t.out_of_summary = 1 THEN 'out' ELSE NULL END`;
+      const r = await db.getFirstAsync<{ n: number; e: number | null; s: number | null; rf: number | null; h: number; f: number; tr: number; i: number; o: number; rb: number; oS: number | null; oE: number | null }>(
         `SELECT SUM(shown) AS n,
                 -- RF-008.10: o estorno no cartão não entra em "Entradas"; ele reduz "Saídas".
                 SUM(CASE WHEN r IS NULL AND amount > 0 AND refund = 0 THEN amount ELSE 0 END) AS e,
                 SUM(CASE WHEN r IS NULL AND (amount < 0 OR refund = 1) THEN amount ELSE 0 END) AS s,
                 SUM(CASE WHEN r IS NULL AND refund = 1 THEN 1 ELSE 0 END) AS rf,
-                SUM(r = 'hidden') AS h, SUM(r = 'future') AS f, SUM(r = 'transfer') AS tr, SUM(r = 'investments') AS i, SUM(r = 'out') AS o,
+                SUM(r = 'hidden') AS h, SUM(r = 'future') AS f, SUM(r = 'transfer') AS tr, SUM(r = 'investments') AS i, SUM(r = 'out') AS o, SUM(r = 'reimb') AS rb,
                 -- UX 0.16 (C2-07): a soma dos marcados "Fora do Resumo", a mesma da linha do Resumo (N-1, N-2)
-                SUM(CASE WHEN r = 'out' AND amount < 0 THEN -amount ELSE 0 END) AS oS,
-                SUM(CASE WHEN r = 'out' AND amount > 0 THEN amount ELSE 0 END) AS oE
+                SUM(CASE WHEN r IN ('out', 'reimb') AND amount < 0 THEN -amount ELSE 0 END) AS oS,
+                SUM(CASE WHEN r IN ('out', 'reimb') AND amount > 0 THEN amount ELSE 0 END) AS oE
          FROM (SELECT t.amount AS amount, t.refund AS refund, ${reason} AS r, CASE WHEN ${shown} THEN 1 ELSE 0 END AS shown FROM transactions t ${w.sql})`,
         w.params,
       );
       const round = (v: number | null | undefined) => Math.round((v ?? 0) * 100) / 100;
-      const byReason = { hidden: r?.h ?? 0, future: r?.f ?? 0, transfer: r?.tr ?? 0, investments: r?.i ?? 0, out: r?.o ?? 0 };
+      // "Fora do Resumo" = reembolsos + marcados por você (UX 0.21: a soma das duas linhas é o total).
+      const byReason = { hidden: r?.h ?? 0, future: r?.f ?? 0, transfer: r?.tr ?? 0, investments: r?.i ?? 0, out: (r?.o ?? 0) + (r?.rb ?? 0), reimb: r?.rb ?? 0, manualOut: r?.o ?? 0 };
       const excluded = byReason.hidden + byReason.future + byReason.transfer + byReason.investments + byReason.out;
-      return { count: r?.n ?? 0, entradas: round(r?.e), saidas: round(r?.s), refunds: r?.rf ?? 0, excluded, byReason, out: { count: byReason.out, saidas: round(r?.oS), entradas: round(r?.oE) } };
+      // UX 0.22 (RF-005.6): em "Saídas", a soma não abate os estornos do cartão, que são entradas e não estão na lista.
+      let refundsNotIncluded = 0;
+      if (filter.type === 'out') {
+        const w2 = whereFor({ ...filter, type: 'in', showHidden: true });
+        const rr = await db.getFirstAsync<{ n: number }>(
+          `SELECT COUNT(*) AS n FROM transactions t ${w2.sql} AND t.refund = 1 AND t.hidden = 0 AND t.date_key <= '${today}'
+             AND ${EFFECTIVE_TRANSFER} = 0 AND COALESCE(${EFFECTIVE_CATEGORY}, '') <> 'investimentos' AND NOT ${OUT_EFF}`, // w2 sempre tem "t.amount > 0"
+          w2.params);
+        refundsNotIncluded = rr?.n ?? 0;
+      }
+      return { count: r?.n ?? 0, entradas: round(r?.e), saidas: round(r?.s), refunds: r?.rf ?? 0, excluded, byReason, out: { count: byReason.out, saidas: round(r?.oS), entradas: round(r?.oE) }, refundsNotIncluded };
+    },
+    /** UX 0.22 (E-21 a): quantos resultados da busca estão fora do período mostrado. */
+    async countOtherPeriods(filter: TxFilter): Promise<number> {
+      if (!filter.search?.trim() || (!filter.from && !filter.to)) return 0;
+      const all = whereFor({ ...filter, from: undefined, to: undefined });
+      const inP = whereFor(filter);
+      const a = await db.getFirstAsync<{ n: number }>(`SELECT COUNT(*) AS n FROM transactions t ${all.sql}`, all.params);
+      const b = await db.getFirstAsync<{ n: number }>(`SELECT COUNT(*) AS n FROM transactions t ${inP.sql}`, inP.params);
+      return Math.max(0, (a?.n ?? 0) - (b?.n ?? 0));
+    },
+    /** UX 0.22: mês da transação mais antiga ("Mês anterior" fica desabilitado nele). */
+    async firstMonth(): Promise<string | null> {
+      const r = await db.getFirstAsync<{ d: string | null }>('SELECT MIN(date_key) AS d FROM transactions');
+      return r?.d ? r.d.slice(0, 7) : null;
     },
     /** RF-008.8: marca "Fora do Resumo" (importadas e manuais). Não muda pares de transferência (N-3). */
     async setOutOfSummary(id: string, value: boolean): Promise<void> {
@@ -826,6 +871,133 @@ export function createRepo(db: Db) {
         await set('bill_unpaired', unpaired);
         await set('refund', refunds);
       });
+      // RF-008.11: depois das transferências e das faturas, que vêm antes (RF-008.11.8).
+      await this.recomputeRefunds();
+    },
+
+    // ---------- RF-008.11: reembolso na conta (UX 0.21) ----------
+    /**
+     * Casa os reembolsos da conta com as saídas que eles devolveram. Os pares que já existem continuam (N-17); os
+     * lançamentos de um par desfeito pela pessoa não casam sozinhos de novo (N-18). Pares novos que mudam um mês já
+     * fechado abrem o aviso (E-20 a); na primeira vez, todo o histórico é casado e o aviso é um só (N-19).
+     */
+    async recomputeRefunds(today: string = spDateKey(new Date())): Promise<{ added: number; removed: number }> {
+      const rows = await db.getAllAsync<{ id: string; account_id: string; date: string; date_key: string; amount: number; transfer: number; category: string | null; operation_type: string | null; pluggy_category_id: string | null; payer_doc: string | null; receiver_doc: string | null; reimb_with: string | null }>(
+        `SELECT t.id, t.account_id, t.date, t.date_key, t.amount, ${EFFECTIVE_TRANSFER} AS transfer, ${EFFECTIVE_CATEGORY} AS category,
+                t.operation_type, t.pluggy_category_id, t.payer_doc, t.receiver_doc, t.reimb_with
+         FROM transactions t JOIN accounts a ON a.id = t.account_id
+         WHERE a.type = 'BANK' AND t.manual = 0`);
+      const digits = (v: string | null) => (v ?? '').replace(/\D/g, '') || null;
+      const cands: RefundCandidate[] = rows.map((r) => ({
+        id: r.id, accountId: r.account_id, date: r.date, amount: r.amount,
+        // RF-008.11.8 e .15: fatura, transferência própria e "Investimentos" ficam de fora; cashback também (.1);
+        // futuras ainda não aconteceram.
+        eligible: !r.transfer && (r.category ?? '') !== 'investimentos' && r.date_key <= today
+          && !(r.amount < 0 && r.operation_type === 'PAGAMENTO_FATURA') && !(r.amount > 0 && r.pluggy_category_id === '08090000'),
+        // Q51 (b): mesmo destinatário só pelo número do documento.
+        doc: digits(r.amount > 0 ? r.payer_doc : r.receiver_doc),
+      }));
+      const existing: RefundPair[] = rows.filter((r) => r.amount > 0 && r.reimb_with).map((r) => ({ creditId: r.id, debitId: r.reimb_with as string }));
+      const blocked = new Set<string>();
+      for (const b of await db.getAllAsync<{ credit_id: string; debit_id: string }>('SELECT credit_id, debit_id FROM reimb_rejected')) {
+        blocked.add(b.credit_id); blocked.add(b.debit_id);
+      }
+      const result = matchRefunds(cands, existing, blocked);
+      const key = (p: RefundPair) => `${p.creditId}|${p.debitId}`;
+      const now = new Set(result.map(key));
+      const before = new Set(existing.map(key));
+      const added = result.filter((p) => !before.has(key(p)));
+      const removed = existing.filter((p) => !now.has(key(p)));
+      const first = (await this.getState('reimb_ready')) === null;
+      const month = new Map(rows.map((r) => [r.id, r.date_key.slice(0, 7)]));
+      const current = today.slice(0, 7);
+      await db.withTransactionAsync(async () => {
+        for (const p of removed) {
+          await db.runAsync('UPDATE transactions SET reimb_with = NULL, reimb_at = NULL, reimb_notice = 0, reimb_first = 0 WHERE id IN (?, ?)', [p.creditId, p.debitId]);
+        }
+        for (const p of added) {
+          for (const [id, other] of [[p.creditId, p.debitId], [p.debitId, p.creditId]]) {
+            const closed = (month.get(id) ?? current) < current ? 1 : 0;
+            await db.runAsync('UPDATE transactions SET reimb_with = ?, reimb_at = ?, reimb_notice = ?, reimb_first = ? WHERE id = ?',
+              [other, today, closed, first ? 1 : 0, id]);
+          }
+        }
+      });
+      if (first) await this.setState('reimb_ready', '1');
+      return { added: added.length, removed: removed.length };
+    },
+    /** Pares atuais (crédito → débito). */
+    listRefundPairs(): Promise<{ creditId: string; debitId: string }[]> {
+      return db.getAllAsync<{ creditId: string; debitId: string }>(
+        'SELECT id AS creditId, reimb_with AS debitId FROM transactions WHERE reimb_with IS NOT NULL AND amount > 0 ORDER BY date_key');
+    },
+    /** T-15: o par deste lançamento, ou o par que a pessoa desfez ("Não é reembolso"). */
+    async refundInfo(id: string): Promise<{ state: 'paired' | 'rejected'; role: 'credit' | 'debit'; other: TransactionRow | null } | null> {
+      const t = await db.getFirstAsync<{ amount: number; reimb_with: string | null }>('SELECT amount, reimb_with FROM transactions WHERE id = ?', [id]);
+      if (!t) return null;
+      const role = t.amount > 0 ? 'credit' : 'debit';
+      if (t.reimb_with) return { state: 'paired', role, other: await this.getTransaction(t.reimb_with) };
+      const rej = await db.getFirstAsync<{ credit_id: string; debit_id: string }>(
+        'SELECT credit_id, debit_id FROM reimb_rejected WHERE credit_id = ? OR debit_id = ? ORDER BY rejected_at DESC', [id, id]);
+      if (!rej) return null;
+      const otherId = rej.credit_id === id ? rej.debit_id : rej.credit_id;
+      return { state: 'rejected', role: rej.credit_id === id ? 'credit' : 'debit', other: await this.getTransaction(otherId) };
+    },
+    /** "Não é reembolso" (E-19 a): desfaz o par; nenhum dos dois casa sozinho de novo (N-18). Devolve o par, para "Desfazer". */
+    async rejectRefund(id: string, nowIso: string = new Date().toISOString()): Promise<RefundPair | null> {
+      const t = await db.getFirstAsync<{ amount: number; reimb_with: string | null }>('SELECT amount, reimb_with FROM transactions WHERE id = ?', [id]);
+      if (!t?.reimb_with) return null;
+      const pair = t.amount > 0 ? { creditId: id, debitId: t.reimb_with } : { creditId: t.reimb_with, debitId: id };
+      await db.withTransactionAsync(async () => {
+        await db.runAsync('UPDATE transactions SET reimb_with = NULL, reimb_at = NULL, reimb_notice = 0, reimb_first = 0 WHERE id IN (?, ?)', [pair.creditId, pair.debitId]);
+        await db.runAsync('INSERT OR REPLACE INTO reimb_rejected (credit_id, debit_id, rejected_at) VALUES (?, ?, ?)', [pair.creditId, pair.debitId, nowIso]);
+      });
+      return pair;
+    },
+    /** "Tratar como reembolso de novo" e o "Desfazer" de "Não é reembolso": refaz o par, sem aviso de mês (só a pessoa mudou). */
+    async restoreRefund(id: string, today: string = spDateKey(new Date())): Promise<boolean> {
+      const rej = await db.getFirstAsync<{ credit_id: string; debit_id: string }>(
+        'SELECT credit_id, debit_id FROM reimb_rejected WHERE credit_id = ? OR debit_id = ? ORDER BY rejected_at DESC', [id, id]);
+      if (!rej) return false;
+      const busy = await db.getFirstAsync<{ n: number }>('SELECT COUNT(*) AS n FROM transactions WHERE id IN (?, ?) AND reimb_with IS NOT NULL', [rej.credit_id, rej.debit_id]);
+      if ((busy?.n ?? 0) > 0) return false;
+      await db.withTransactionAsync(async () => {
+        await db.runAsync('DELETE FROM reimb_rejected WHERE credit_id = ? AND debit_id = ?', [rej.credit_id, rej.debit_id]);
+        await db.runAsync('UPDATE transactions SET reimb_with = ?, reimb_at = ?, reimb_notice = 0, reimb_first = 0 WHERE id = ?', [rej.debit_id, today, rej.credit_id]);
+        await db.runAsync('UPDATE transactions SET reimb_with = ?, reimb_at = ?, reimb_notice = 0, reimb_first = 0 WHERE id = ?', [rej.credit_id, today, rej.debit_id]);
+      });
+      return true;
+    },
+    /** T-18 (E-20 a): aviso do mês que mudou por reembolso que chegou depois (não conta a primeira vez, N-19). */
+    async refundMonthNotice(month: string): Promise<{ count: number; total: number; date: string; side: 'despesas' | 'receitas' } | null> {
+      // Cada par conta uma vez (pelo débito); o valor é o que saiu das despesas (ou das receitas, se só o crédito é do mês).
+      const r = await db.getFirstAsync<{ n: number; dsum: number | null; csum: number | null; date: string | null }>(
+        `SELECT COUNT(DISTINCT CASE WHEN amount < 0 THEN id ELSE reimb_with END) AS n,
+                SUM(CASE WHEN amount < 0 THEN -amount END) AS dsum, SUM(CASE WHEN amount > 0 THEN amount END) AS csum, MAX(reimb_at) AS date
+         FROM transactions WHERE reimb_notice = 1 AND reimb_first = 0 AND reimb_with IS NOT NULL AND date_key BETWEEN ? AND ?`,
+        [`${month}-01`, `${month}-31`]);
+      if (!r || !r.n || !r.date) return null;
+      const deb = (r.dsum ?? 0) > 0;
+      return { count: r.n, total: Math.round(((deb ? r.dsum : r.csum) ?? 0) * 100) / 100, date: r.date, side: deb ? 'despesas' : 'receitas' };
+    },
+    /** T-23 (E-20 a, N-19): meses com aviso aberto e o aviso único da primeira vez. */
+    async refundNotices(): Promise<{ first: { pairs: number; months: number } | null; months: { month: string; date: string }[] }> {
+      const months = await db.getAllAsync<{ month: string; date: string }>(
+        `SELECT substr(date_key, 1, 7) AS month, MAX(reimb_at) AS date FROM transactions
+         WHERE reimb_notice = 1 AND reimb_with IS NOT NULL GROUP BY 1 ORDER BY 1`);
+      const f = await db.getFirstAsync<{ pairs: number; months: number }>(
+        `SELECT SUM(amount > 0) AS pairs, COUNT(DISTINCT CASE WHEN reimb_notice = 1 THEN substr(date_key, 1, 7) END) AS months
+         FROM transactions WHERE reimb_first = 1 AND reimb_with IS NOT NULL`);
+      const pending = await db.getFirstAsync<{ n: number }>('SELECT COUNT(*) AS n FROM transactions WHERE reimb_first = 1 AND reimb_notice = 1 AND reimb_with IS NOT NULL');
+      return { first: (pending?.n ?? 0) > 0 ? { pairs: f?.pairs ?? 0, months: f?.months ?? 0 } : null, months };
+    },
+    /** "Fechar" em T-18: só o aviso daquele mês. */
+    async dismissRefundMonth(month: string): Promise<void> {
+      await db.runAsync('UPDATE transactions SET reimb_notice = 0 WHERE reimb_notice = 1 AND reimb_first = 0 AND date_key BETWEEN ? AND ?', [`${month}-01`, `${month}-31`]);
+    },
+    /** "Fechar" em T-23: fecha este aviso e os de T-18. */
+    async dismissRefundNotices(): Promise<void> {
+      await db.runAsync('UPDATE transactions SET reimb_notice = 0 WHERE reimb_notice = 1');
     },
   };
 }
@@ -845,7 +1017,7 @@ export type CategoryChange = {
   others: number;
 };
 
-export type ExclusionCounts = { hidden: number; future: number; transfer: number; investments: number; out: number };
+export type ExclusionCounts = { hidden: number; future: number; transfer: number; investments: number; out: number; reimb: number; manualOut: number };
 
 export type WealthPoint = { date: string; accounts: number; investments: number; total: number; partial: { name: string; date: string }[] };
 
@@ -858,7 +1030,7 @@ export type MonthSummary = {
   aplicado: number;
   resgatado: number;
   /** RF-008.8 (N-2): soma das saídas e das entradas marcadas "Fora do Resumo" e quantos lançamentos. */
-  outOfSummary: { saidas: number; entradas: number; count: number };
+  outOfSummary: { saidas: number; entradas: number; count: number; /** RF-008.11: quantos desses são pontas de reembolso. */ reimbursements: number };
   /** RF-008.10: total = líquido do mês (gastos − estornos); refunds = estornos descontados. */
   byCategory: { category: string | null; total: number; refunds: { count: number; total: number } }[];
   /** RF-008.10: estornos de compras no cartão do mês, já descontados das despesas. */

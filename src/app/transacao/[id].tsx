@@ -1,5 +1,5 @@
 // T-15 Detalhe da transação + T-16 Escolher categoria — RF-006, RF-007.2, PM-7, PM-8
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { Dialog, Divider, Icon, List, Modal, Portal, Snackbar, Switch, Text } from 'react-native-paper';
@@ -7,7 +7,7 @@ import { setFlash, takeFlash } from '../../state/flash';
 import { Button, DialogActions, AppDialog, ListAccordion, ListItem } from '../../ui/touch';
 import { useApp } from '../../state/AppContext';
 import { CATEGORIES, categoryById, NO_CATEGORY } from '../../domain/categories';
-import { accountConnectionLine, displayDescription, formatCount, formatDate, formatMonth, setMaskValues, isMaskingValues } from '../../domain/format';
+import { accountConnectionLine, amountA11y, displayDescription, formatBalance, formatCount, formatDate, formatMonth, formatSignedAmount, setMaskValues, isMaskingValues, spokenDate } from '../../domain/format';
 import type { CategoryChange, TransactionRow } from '../../data/repo';
 import { Amount, announce, Banner, EmptyState, OptionRow, Screen, Skeleton, useAppTheme, Chip, isFutureTx } from '../../ui/components';
 
@@ -20,7 +20,17 @@ export default function TransacaoDetalhe() {
   const { repo, bump } = useApp();
   const [tx, setTx] = useState<TransactionRow | null | undefined>(undefined);
   const [picker, setPicker] = useState(false);
-  const [snack, setSnack] = useState<Undo | { message: string; undo?: undefined } | null>(null);
+  const [snack, setSnackState] = useState<Undo | { message: string; undo?: undefined } | null>(null);
+  const snackSeq = useRef(0);
+  const lastSnack = useRef<Undo | { message: string; undo?: undefined } | null>(null);
+  // C4-02: um aviso novo com outro aberto fecha o antigo e abre o novo logo depois (a animação de entrada roda de novo).
+  const setSnack = (v: Undo | { message: string; undo?: undefined } | null) => {
+    if (!v) { setSnackState(null); return; }
+    snackSeq.current += 1; lastSnack.current = v;
+    const mine = snackSeq.current;
+    setSnackState(null);
+    setTimeout(() => { if (snackSeq.current === mine) setSnackState(v); }, 60);
+  };
 
   const [confirmDelete, setConfirmDelete] = useState(false);
   // UX 0.17 (RF-006.3, E-12 a): aviso dos lançamentos anteriores do mesmo destinatário, até ser usado ou fechado.
@@ -34,9 +44,13 @@ export default function TransacaoDetalhe() {
     setConfirmApply(true);
   }, [dialogo]);
   const [helpOpen, setHelpOpen] = useState(false);
+  // UX 0.21 (RF-008.11): o par de reembolso deste lançamento, ou o par que a pessoa desfez.
+  const [reimb, setReimb] = useState<Awaited<ReturnType<typeof repo.refundInfo>>>(null);
+  const [confirmNotRefund, setConfirmNotRefund] = useState(false);
   // Recarrega ao voltar de T-17 (edição de lançamento manual).
   useFocusEffect(useCallback(() => {
     repo.getTransaction(id).then(setTx).catch(() => setTx(null));
+    repo.refundInfo(id).then(setReimb).catch(() => setReimb(null));
     // UX 0.18: "Alterações salvas" ao voltar da edição de um lançamento manual.
     const m = takeFlash('transacao');
     if (m) { setSnack({ message: m }); announce(m); }
@@ -168,11 +182,54 @@ export default function TransacaoDetalhe() {
     );
   }
 
+  async function reloadPair() {
+    setTx(await repo.getTransaction(current.id));
+    setReimb(await repo.refundInfo(current.id));
+  }
+
+  /** UX 0.21 (E-19 a): "Não é reembolso", depois de confirmar; "Desfazer" refaz o par. */
+  async function notRefund() {
+    setConfirmNotRefund(false);
+    try {
+      const pair = await repo.rejectRefund(current.id);
+      if (!pair) throw new Error('sem par');
+      bump(); await reloadPair();
+      const message = 'Os dois lançamentos voltaram a contar no Resumo';
+      announce(message);
+      setSnack({ message, undo: async () => { try { await repo.restoreRefund(current.id); bump(); await reloadPair(); } catch { setSnack({ message: 'Não foi possível mudar. Tente de novo.' }); } } });
+    } catch {
+      setSnack({ message: 'Não foi possível mudar. Tente de novo.' });
+      announce('Não foi possível mudar. Tente de novo.');
+    }
+  }
+  /** "Tratar como reembolso de novo": sem confirmação; "Desfazer" desfaz de novo. */
+  async function refundAgain() {
+    try {
+      if (!(await repo.restoreRefund(current.id))) throw new Error('não refez');
+      bump(); await reloadPair();
+      const message = 'Voltou a ficar fora do Resumo como reembolso';
+      announce(message);
+      setSnack({ message, undo: async () => { try { await repo.rejectRefund(current.id); bump(); await reloadPair(); } catch { setSnack({ message: 'Não foi possível mudar. Tente de novo.' }); } } });
+    } catch {
+      setSnack({ message: 'Não foi possível mudar. Tente de novo.' });
+      announce('Não foi possível mudar. Tente de novo.');
+    }
+  }
+
+  const paired = reimb?.state === 'paired' && reimb.other ? reimb : null;
+  const other = reimb?.other ?? null;
+  const monthOf = (k: string) => formatMonth(Number(k.slice(0, 4)), Number(k.slice(5, 7)));
+  const br = (k: string) => `${k.slice(8, 10)}/${k.slice(5, 7)}/${k.slice(0, 4)}`;
+  const creditTx = paired ? (paired.role === 'credit' ? tx : paired.other!) : null;
+  const debitTx = paired ? (paired.role === 'credit' ? paired.other! : tx) : null;
   const cat = categoryById(tx.category);
+  const seqNow = snackSeq.current;
   return (
     <>
       <Screen style={{ paddingTop: 16, gap: 8 }}>
-        <Amount value={tx.amount} variant="headlineSmall" neutral={isFutureTx(tx.date_key) || Boolean(tx.refund)} />
+        <Amount value={tx.amount} variant="headlineSmall" neutral={isFutureTx(tx.date_key) || Boolean(tx.refund) || Boolean(paired) || tx.out_of_summary === 1} />
+        {/* UX 0.21: nas duas pontas do par, o selo "Fora do Resumo" junto do valor. */}
+        {paired && <View style={{ alignSelf: 'flex-start' }}><Chip label="Fora do Resumo" icon="calculator-variant-outline" /></View>}
         {isFutureTx(tx.date_key) && <View style={{ alignSelf: 'flex-start' }}><Chip label="Futura" icon="calendar-clock" /></View>}
         {/* UX 0.17 (RF-008.10): estorno de compra no cartão; não há chave para marcar ou desmarcar (N-9). */}
         {Boolean(tx.refund) && (
@@ -217,6 +274,43 @@ export default function TransacaoDetalhe() {
           />
         )}
         <ListItem title="Origem" description={tx.manual ? 'Manual' : `Importada de ${tx.connection_name ?? 'Meu Pluggy'}`} style={{ minHeight: 56 }} />
+        {/* UX 0.21 (RF-008.11): bloco do reembolso reconhecido, com a outra ponta. Nenhum documento aparece (RNF-007). */}
+        {paired && other && creditTx && debitTx && (
+          <View style={{ gap: 4 }}>
+            <Text variant="titleSmall" accessibilityRole="header">{paired.role === 'credit' ? 'Reembolso reconhecido' : 'Saída reembolsada'}</Text>
+            <Text variant="bodyMedium">
+              {paired.role === 'credit'
+                ? 'Este crédito tem o mesmo valor e o mesmo destinatário de uma saída anterior. Os dois ficam fora do Resumo: não contam como receita nem como despesa.'
+                : 'Esta saída foi devolvida por um crédito de mesmo valor, do mesmo destinatário. Os dois ficam fora do Resumo: não contam como receita nem como despesa.'}
+            </Text>
+            <ListItem
+              title={paired.role === 'credit' ? 'Saída reembolsada' : 'Reembolso'}
+              description={`${displayDescription(other.description)}\n${br(other.date_key)} · ${formatSignedAmount(other.amount)}\n${accountConnectionLine(other.account_name, other.account_subtype, other.connection_name)}`}
+              right={(p) => <List.Icon {...p} icon="chevron-right" />}
+              onPress={() => router.push(`/transacao/${other.id}`)}
+              accessibilityRole="button"
+              accessibilityLabel={`${paired.role === 'credit' ? 'Saída reembolsada' : 'Reembolso'}: ${displayDescription(other.description)}, ${spokenDate(other.date_key)} de ${other.date_key.slice(0, 4)}, ${amountA11y(other.amount).toLowerCase()}, ${other.account_name}. Abre a transação.`}
+              style={{ minHeight: 56 }}
+            />
+            {debitTx.date_key.slice(0, 7) !== creditTx.date_key.slice(0, 7) && (
+              <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
+                {`A saída é de ${monthOf(debitTx.date_key)} e o reembolso, de ${monthOf(creditTx.date_key)}. Os dois meses mudam no Resumo.`}
+              </Text>
+            )}
+            {/* C4-01 e C4-03: no fim do bloco, antes das chaves; cor normal, porque a ação é reversível. */}
+            <Button onPress={() => setConfirmNotRefund(true)} style={{ alignSelf: 'flex-start' }}>Não é reembolso</Button>
+          </View>
+        )}
+        {reimb?.state === 'rejected' && other && (
+          <View style={{ gap: 4 }}>
+            <Text variant="bodyMedium">
+              {reimb.role === 'credit'
+                ? `Você disse que este lançamento não é reembolso de ${displayDescription(other.description)}, de ${br(other.date_key)}.`
+                : `Você disse que este lançamento não foi reembolsado por ${displayDescription(other.description)}, de ${br(other.date_key)}.`}
+            </Text>
+            <Button onPress={refundAgain} style={{ alignSelf: 'flex-start' }}>Tratar como reembolso de novo</Button>
+          </View>
+        )}
         <OptionRow
           kind="switch"
           label="Transferência entre minhas contas"
@@ -227,14 +321,15 @@ export default function TransacaoDetalhe() {
         <OptionRow
           kind="switch"
           label="Fora do Resumo"
-          description={tx.transfer === 1 ? 'Transferências entre suas contas já ficam fora do Resumo.' : 'Não conta como receita nem despesa no Resumo. Continua no Extrato, e o saldo da conta não muda.'}
-          checked={tx.out_of_summary === 1}
-          disabled={tx.transfer === 1}
+          description={paired ? "Ligada pelo app: reembolso reconhecido. Para mudar, use 'Não é reembolso'." : tx.transfer === 1 ? 'Transferências entre suas contas já ficam fora do Resumo.' : 'Não conta como receita nem despesa no Resumo. Continua no Extrato, e o saldo da conta não muda.'}
+          checked={tx.out_of_summary === 1 || Boolean(paired)}
+          disabled={tx.transfer === 1 || Boolean(paired)}
           onPress={() => toggleOut(tx.out_of_summary !== 1)}
         />
         <ListAccordion title="Quando usar" expanded={helpOpen} onPress={() => setHelpOpen(!helpOpen)} style={{ minHeight: 48 }}>
-          <Text variant="bodyMedium" style={{ paddingHorizontal: 16, paddingBottom: 8 }}>Use para o que passa pela sua conta mas não é gasto nem ganho seu, como um imposto da sua empresa (DAS, DARF) pago pela conta pessoal.</Text>
+          <Text variant="bodyMedium" style={{ paddingHorizontal: 16, paddingBottom: 8 }}>Use para o que passa pela sua conta mas não é gasto nem ganho seu, como um imposto da sua empresa (DAS, DARF) pago pela conta pessoal. Use também para um reembolso que o app não reconheceu. Para a compra devolvida também sair das despesas, marque as duas.</Text>
         </ListAccordion>
+
         <Divider style={{ marginVertical: 8 }} />
         {tx.manual ? (
           // RF-007 (T-15): lançamento manual pode ser editado e excluído.
@@ -263,6 +358,24 @@ export default function TransacaoDetalhe() {
           <DialogActions>
             <Button onPress={() => setConfirmApply(false)}>Cancelar</Button>
             <Button onPress={applyPrevious}>Mudar</Button>
+          </DialogActions>
+        </AppDialog>
+        {/* UX 0.21 (E-19 a): confirmação que diz o que volta a contar e em quais meses; "Cancelar" vem primeiro. */}
+        <AppDialog visible={confirmNotRefund} onDismiss={() => setConfirmNotRefund(false)}>
+          <Dialog.Title>Não é reembolso?</Dialog.Title>
+          <Dialog.Content>
+            <Text variant="bodyMedium">
+              {creditTx && debitTx
+                ? creditTx.date_key.slice(0, 7) === debitTx.date_key.slice(0, 7)
+                  // 0.22 (esclarecimento): no mesmo mês, o mês aparece uma vez só.
+                  ? `Os dois lançamentos voltam a contar no Resumo: a entrada de ${formatBalance(creditTx.amount)} como receita e a saída de ${formatBalance(Math.abs(debitTx.amount))} como despesa, as duas em ${monthOf(creditTx.date_key)}.`
+                  : `Os dois lançamentos voltam a contar no Resumo: a entrada de ${formatBalance(creditTx.amount)} como receita em ${monthOf(creditTx.date_key)} e a saída de ${formatBalance(Math.abs(debitTx.amount))} como despesa em ${monthOf(debitTx.date_key)}.`
+                : ''}
+            </Text>
+          </Dialog.Content>
+          <DialogActions>
+            <Button onPress={() => setConfirmNotRefund(false)}>Cancelar</Button>
+            <Button onPress={notRefund}>Não é reembolso</Button>
           </DialogActions>
         </AppDialog>
         <AppDialog visible={confirmDelete} onDismiss={() => setConfirmDelete(false)}>
@@ -300,13 +413,16 @@ export default function TransacaoDetalhe() {
           </ScrollView>
         </Modal>
       </Portal>
+      {/* C4-02: cada aviso é um Snackbar novo (chave própria); o fechamento de um aviso antigo não apaga o seguinte, e o
+          texto continua na faixa durante a animação de saída. */}
       <Snackbar
         visible={!!snack}
-        onDismiss={() => setSnack(null)}
+        // O número deste aviso é o da renderização: o fechamento de um aviso antigo nunca apaga o seguinte.
+        onDismiss={() => { if (snackSeq.current === seqNow) setSnackState(null); }}
         duration={5000}
-        action={snack?.undo ? { label: 'Desfazer', onPress: () => snack.undo?.() } : undefined}
+        action={(snack ?? lastSnack.current)?.undo ? { label: 'Desfazer', onPress: () => (snack ?? lastSnack.current)?.undo?.() } : undefined}
       >
-        {snack?.message}
+        {(snack ?? lastSnack.current)?.message}
       </Snackbar>
     </>
   );
